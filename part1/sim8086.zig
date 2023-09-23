@@ -6,7 +6,18 @@ const fs = std.fs;
 const stdout = std.io.getStdOut().writer();
 
 pub fn main() !void {
-    try decode("foobar");
+    var buffer: [1000]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    std.debug.print("Arguments: {s}\n", .{args});
+
+    const filename = args[1];
+
+    try decode(filename);
 }
 
 fn decode(filename: []const u8) !void {
