@@ -16,6 +16,9 @@ const Allocator = std.mem.Allocator;
 
 const stdout = std.io.getStdOut().writer();
 
+const Inst = struct { name: []const u8, dest: []const u8, source: []const u8 };
+const InstType = enum { mov_reg_to_reg, mov_imm_to_reg, unknown };
+
 pub fn main() !void {
     var buffer: [1000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
@@ -55,6 +58,43 @@ fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
     const four_bit_inst_code = (byte0 & 0b11110000) >> 4;
     const six_bit_inst_code = (byte0 & 0b11111100) >> 2;
 
+    const four_bit_instruction = switch (four_bit_inst_code) {
+        0b1011 => InstType.mov_imm_to_reg,
+        else => null,
+    };
+
+    const six_bit_instruction = switch (six_bit_inst_code) {
+        0b100010 => InstType.mov_reg_to_reg,
+        else => null,
+    };
+
+    const instruction = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
+
+    const inst = switch (instruction) {
+        InstType.mov_imm_to_reg => decode_mov_imm_to_reg(byte0, byte1),
+        InstType.mov_reg_to_reg => decode_mov_reg_to_reg(byte0, byte1),
+        else => Inst{ .name = "unknown", .dest = "none", .source = "none" },
+    };
+
+    return try std.fmt.allocPrint(
+        alloc,
+        "{s} {s}, {s}",
+        .{ inst.name, inst.dest, inst.source },
+    );
+}
+
+fn decode_mov_imm_to_reg(byte0: u8, byte1: u8) Inst {
+    _ = byte0;
+    _ = byte1;
+
+    return Inst{
+        .name = "mov2",
+        .dest = "<todo>",
+        .source = "<todo>",
+    };
+}
+
+fn decode_mov_reg_to_reg(byte0: u8, byte1: u8) Inst {
     // 2 bits are "DW" (one bit each)
     // page 161 of manual
     const d = (byte0 & 0b00000010) >> 1;
@@ -69,19 +109,6 @@ fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
     const reg = (byte1 & 0b00111000) >> 3;
     const r_m = (byte1 & 0b00000111);
 
-    const four_bit_instruction = switch (four_bit_inst_code) {
-        0b1011 => "mov",
-        else => null,
-    };
-
-    const six_bit_instruction = switch (six_bit_inst_code) {
-        0b100010 => "mov",
-        else => null,
-    };
-
-    //try stdout.print("--- {b} {s}, \n", .{ six_bit_inst_code, six_bit_instruction orelse "unknown" });
-
-    const instruction = four_bit_instruction orelse six_bit_instruction orelse "unknown";
     var reg1 = register_name(reg, w);
     var reg2 = register_name(r_m, w);
 
@@ -91,11 +118,7 @@ fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
         reg2 = temp;
     }
 
-    return try std.fmt.allocPrint(
-        alloc,
-        "{s} {s}, {s}",
-        .{ instruction, reg1, reg2 },
-    );
+    return Inst{ .name = "mov", .dest = reg1, .source = reg2 };
 }
 
 // Register table is page 162
