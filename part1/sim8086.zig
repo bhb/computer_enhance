@@ -1,4 +1,14 @@
+// Homework 1
 // Once you’ve successfully disassembled the binaries from both listings thirty-seven and thirty-eight, you’re done!
+
+// Homework 2
+// Files: 0039
+// Tables on page 162
+// Immediate to register is page 164
+
+// Usage:
+// zig run sim8086.zig -- listing_0037_many_register_mov
+// zig run sim8086.zig -- listing_0038_many_register_mov
 
 const std = @import("std");
 const fs = std.fs;
@@ -28,19 +38,22 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     var buffer: [100]u8 = undefined;
     try file.seekTo(0);
     const bytes_read = try file.readAll(&buffer);
-    _ = bytes_read;
 
     try stdout.print("bits 16\n\n", .{});
 
-    try stdout.print("{s}\n", .{try instruction_string(buffer[0], buffer[1], alloc)});
+    var i: usize = 0;
 
-    //try stdout.print("{s} {s}, {s}\n", .{ instruction, reg1, reg2 });
+    while (i < bytes_read) : (i += 2) {
+        try stdout.print("{s}\n", .{try instruction_string(buffer[i], buffer[i + 1], alloc)});
+    }
 }
 
 fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
     // Manual is https://edge.edx.org/c4x/BITSPilani/EEE231/asset/8086_family_Users_Manual_1_.pdf (page 164)
     // 6 bits are instruction code
-    const inst_code = (byte0 & 0b11111100) >> 2;
+
+    const four_bit_inst_code = (byte0 & 0b11110000) >> 4;
+    const six_bit_inst_code = (byte0 & 0b11111100) >> 2;
 
     // 2 bits are "DW" (one bit each)
     // page 161 of manual
@@ -56,11 +69,19 @@ fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
     const reg = (byte1 & 0b00111000) >> 3;
     const r_m = (byte1 & 0b00000111);
 
-    const instruction = switch (inst_code) {
-        0b100010 => "mov",
-        else => "unknown",
+    const four_bit_instruction = switch (four_bit_inst_code) {
+        0b1011 => "mov",
+        else => null,
     };
 
+    const six_bit_instruction = switch (six_bit_inst_code) {
+        0b100010 => "mov",
+        else => null,
+    };
+
+    //try stdout.print("--- {b} {s}, \n", .{ six_bit_inst_code, six_bit_instruction orelse "unknown" });
+
+    const instruction = four_bit_instruction orelse six_bit_instruction orelse "unknown";
     var reg1 = register_name(reg, w);
     var reg2 = register_name(r_m, w);
 
