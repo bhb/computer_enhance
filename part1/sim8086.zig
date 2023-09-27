@@ -47,13 +47,15 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     var i: usize = 0;
 
     while (i < bytes_read) : (i += 2) {
-        try stdout.print("{s}\n", .{try instruction_string(buffer[i], buffer[i + 1], alloc)});
+        try stdout.print("{s}\n", .{try instruction_string(buffer[i..], alloc)});
     }
 }
 
-fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
+fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
     // Manual is https://edge.edx.org/c4x/BITSPilani/EEE231/asset/8086_family_Users_Manual_1_.pdf (page 164)
     // 6 bits are instruction code
+
+    const byte0 = bytes[0];
 
     const four_bit_inst_code = (byte0 & 0b11110000) >> 4;
     const six_bit_inst_code = (byte0 & 0b11111100) >> 2;
@@ -71,8 +73,8 @@ fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
     const instruction = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
 
     const inst = switch (instruction) {
-        InstType.mov_imm_to_reg => decode_mov_imm_to_reg(byte0, byte1),
-        InstType.mov_reg_to_reg => decode_mov_reg_to_reg(byte0, byte1),
+        InstType.mov_imm_to_reg => decode_mov_imm_to_reg(bytes),
+        InstType.mov_reg_to_reg => decode_mov_reg_to_reg(bytes),
         else => Inst{ .name = "unknown", .dest = "none", .source = "none" },
     };
 
@@ -83,9 +85,8 @@ fn instruction_string(byte0: u8, byte1: u8, alloc: Allocator) ![]const u8 {
     );
 }
 
-fn decode_mov_imm_to_reg(byte0: u8, byte1: u8) Inst {
-    _ = byte0;
-    _ = byte1;
+fn decode_mov_imm_to_reg(bytes: []u8) Inst {
+    _ = bytes;
 
     return Inst{
         .name = "mov2",
@@ -94,7 +95,10 @@ fn decode_mov_imm_to_reg(byte0: u8, byte1: u8) Inst {
     };
 }
 
-fn decode_mov_reg_to_reg(byte0: u8, byte1: u8) Inst {
+fn decode_mov_reg_to_reg(bytes: []u8) Inst {
+    const byte0 = bytes[0];
+    const byte1 = bytes[1];
+
     // 2 bits are "DW" (one bit each)
     // page 161 of manual
     const d = (byte0 & 0b00000010) >> 1;
