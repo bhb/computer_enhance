@@ -20,14 +20,12 @@ const Inst = struct { name: []const u8, dest: []const u8, source: []const u8 };
 const InstType = enum { mov_reg_to_reg, mov_imm_to_reg, unknown };
 
 pub fn main() !void {
-    var buffer: [1000]u8 = undefined;
+    var buffer: [2000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
 
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
-
-    std.debug.print("Arguments: {s}\n", .{args});
 
     const filename = args[1];
 
@@ -72,11 +70,15 @@ fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
 
     const instruction = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
 
+    //std.debug.print("bytes leng: {d}\n", .{bytes.len});
+
     const inst = switch (instruction) {
-        InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes),
+        InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
         InstType.mov_reg_to_reg => decode_mov_reg_to_reg(bytes),
         else => Inst{ .name = "unknown", .dest = "none", .source = "none" },
     };
+
+    std.debug.print("inst: {}\n", .{inst});
 
     return try std.fmt.allocPrint(
         alloc,
@@ -85,7 +87,7 @@ fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
     );
 }
 
-fn decode_mov_imm_to_reg(bytes: []u8) !Inst {
+fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     const byte0 = bytes[0];
 
     const w = (byte0 & 0b00001000) >> 3;
@@ -96,28 +98,31 @@ fn decode_mov_imm_to_reg(bytes: []u8) !Inst {
     var imm_bytes: []u8 = undefined;
 
     if (w == 1) {
-        imm_bytes = bytes[1..2];
+        imm_bytes = bytes[1..3];
+        std.debug.print("imm_bytes 1: {b} {b} {d}\n", .{ imm_bytes[0], imm_bytes[1], imm_bytes.len });
     } else {
-        imm_bytes = bytes[1..1];
+        imm_bytes = bytes[1..2];
+        std.debug.print("imm_bytes 2: {d} {d}\n", .{ imm_bytes[0], imm_bytes.len });
     }
 
     return Inst{
         .name = "mov2",
         .dest = reg,
-        .source = try decode_value(imm_bytes),
+        .source = try decode_value(imm_bytes, alloc),
     };
 }
 
-fn decode_value(bytes: []u8) ![]const u8 {
-    var buf: [8]u8 = undefined;
-
+fn decode_value(bytes: []u8, alloc: Allocator) ![]const u8 {
     var value: u16 = bytes[0];
 
     if (bytes.len == 2) {
         value = value << 8;
         value += bytes[1];
     }
-    return try std.fmt.bufPrint(&buf, "{}", .{value});
+
+    var str = try std.fmt.allocPrint(alloc, "{d}", .{value});
+    std.debug.print("decode_value: {d} {b} {s}\n", .{ value, value, str });
+    return str;
 }
 
 fn decode_mov_reg_to_reg(bytes: []u8) Inst {
