@@ -73,7 +73,7 @@ fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
     const instruction = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
 
     const inst = switch (instruction) {
-        InstType.mov_imm_to_reg => decode_mov_imm_to_reg(bytes),
+        InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes),
         InstType.mov_reg_to_reg => decode_mov_reg_to_reg(bytes),
         else => Inst{ .name = "unknown", .dest = "none", .source = "none" },
     };
@@ -85,14 +85,39 @@ fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
     );
 }
 
-fn decode_mov_imm_to_reg(bytes: []u8) Inst {
-    _ = bytes;
+fn decode_mov_imm_to_reg(bytes: []u8) !Inst {
+    const byte0 = bytes[0];
+
+    const w = (byte0 & 0b00001000) >> 3;
+    const reg_code = (byte0 & 0b00000111) >> 3;
+
+    const reg = register_name(reg_code, w);
+
+    var imm_bytes: []u8 = undefined;
+
+    if (w == 1) {
+        imm_bytes = bytes[1..2];
+    } else {
+        imm_bytes = bytes[1..1];
+    }
 
     return Inst{
         .name = "mov2",
-        .dest = "<todo>",
-        .source = "<todo>",
+        .dest = reg,
+        .source = try decode_value(imm_bytes),
     };
+}
+
+fn decode_value(bytes: []u8) ![]const u8 {
+    var buf: [8]u8 = undefined;
+
+    var value: u16 = bytes[0];
+
+    if (bytes.len == 2) {
+        value = value << 8;
+        value += bytes[1];
+    }
+    return try std.fmt.bufPrint(&buf, "{}", .{value});
 }
 
 fn decode_mov_reg_to_reg(bytes: []u8) Inst {
