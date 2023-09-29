@@ -16,7 +16,7 @@ const Allocator = std.mem.Allocator;
 
 const stdout = std.io.getStdOut().writer();
 
-const Inst = struct { name: []const u8, dest: []const u8, source: []const u8 };
+const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: u4 };
 const InstType = enum { mov_reg_to_reg, mov_imm_to_reg, unknown };
 
 pub fn main() !void {
@@ -43,13 +43,22 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     try stdout.print("bits 16\n\n", .{});
 
     var i: usize = 0;
+    var instr: Inst = undefined;
+    var instr_str: []const u8 = undefined;
 
-    while (i < bytes_read) : (i += 2) {
-        try stdout.print("{s}\n", .{try instruction_string(buffer[i..], alloc)});
+    while (i < bytes_read) {
+        instr = try instruction(buffer[i..], alloc);
+        i += instr.bytes_read;
+        instr_str = try std.fmt.allocPrint(
+            alloc,
+            "{s} {s}, {s}",
+            .{ instr.name, instr.dest, instr.source },
+        );
+        try stdout.print("{s}\n", .{instr_str});
     }
 }
 
-fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
+fn instruction(bytes: []u8, alloc: Allocator) !Inst {
     // Manual is https://edge.edx.org/c4x/BITSPilani/EEE231/asset/8086_family_Users_Manual_1_.pdf (page 164)
     // 6 bits are instruction code
 
@@ -68,23 +77,17 @@ fn instruction_string(bytes: []u8, alloc: Allocator) ![]const u8 {
         else => null,
     };
 
-    const instruction = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
+    const instr_type = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
 
     //std.debug.print("bytes leng: {d}\n", .{bytes.len});
 
-    const inst = switch (instruction) {
+    const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
         InstType.mov_reg_to_reg => decode_mov_reg_to_reg(bytes),
-        else => Inst{ .name = "unknown", .dest = "none", .source = "none" },
+        else => Inst{ .name = "unknown", .dest = "none", .source = "none", .bytes_read = 1 },
     };
 
-    std.debug.print("inst: {}\n", .{inst});
-
-    return try std.fmt.allocPrint(
-        alloc,
-        "{s} {s}, {s}",
-        .{ inst.name, inst.dest, inst.source },
-    );
+    return inst;
 }
 
 fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
@@ -97,18 +100,23 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
 
     var imm_bytes: []u8 = undefined;
 
+    var bytes_read: u4 = undefined;
+
     if (w == 1) {
+        bytes_read = 2;
         imm_bytes = bytes[1..3];
-        std.debug.print("imm_bytes 1: {b} {b} {d}\n", .{ imm_bytes[0], imm_bytes[1], imm_bytes.len });
+        //std.debug.print("imm_bytes 1: {b} {b} {d}\n", .{ imm_bytes[0], imm_bytes[1], imm_bytes.len });
     } else {
+        bytes_read = 1;
         imm_bytes = bytes[1..2];
-        std.debug.print("imm_bytes 2: {d} {d}\n", .{ imm_bytes[0], imm_bytes.len });
+        //std.debug.print("imm_bytes 2: {d} {d}\n", .{ imm_bytes[0], imm_bytes.len });
     }
 
     return Inst{
         .name = "mov2",
         .dest = reg,
         .source = try decode_value(imm_bytes, alloc),
+        .bytes_read = bytes_read,
     };
 }
 
@@ -116,12 +124,16 @@ fn decode_value(bytes: []u8, alloc: Allocator) ![]const u8 {
     var value: u16 = bytes[0];
 
     if (bytes.len == 2) {
+        value = bytes[1];
         value = value << 8;
-        value += bytes[1];
+        value += bytes[0];
+        // HERE - don't debug this further until you are correctly pulling right number of bytes
+        // per instruction
+        std.debug.print("decode_value: {d} {b} {b} {b}\n", .{ value, value, bytes[0], bytes[1] });
     }
 
     var str = try std.fmt.allocPrint(alloc, "{d}", .{value});
-    std.debug.print("decode_value: {d} {b} {s}\n", .{ value, value, str });
+
     return str;
 }
 
@@ -152,7 +164,7 @@ fn decode_mov_reg_to_reg(bytes: []u8) Inst {
         reg2 = temp;
     }
 
-    return Inst{ .name = "mov", .dest = reg1, .source = reg2 };
+    return Inst{ .name = "mov", .dest = reg1, .source = reg2, .bytes_read = 2 };
 }
 
 // Register table is page 162
