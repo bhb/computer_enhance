@@ -20,6 +20,10 @@ const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, by
 const InstType = enum { mov_reg_to_reg, mov_imm_to_reg, unknown };
 
 pub fn main() !void {
+    //var x: u16 = 3948;
+
+    //std.debug.print("{b}, {b}, {b}\n\n", .{ x, (~x + 1), 61588 });
+
     var buffer: [2000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
@@ -94,7 +98,7 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     const byte0 = bytes[0];
 
     const w = (byte0 & 0b00001000) >> 3;
-    const reg_code = (byte0 & 0b00000111) >> 3;
+    const reg_code = (byte0 & 0b00000111);
 
     const reg = register_name(reg_code, w);
 
@@ -123,13 +127,15 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
 fn decode_value(bytes: []u8, alloc: Allocator) ![]const u8 {
     var value: u16 = bytes[0];
 
+    //std.debug.print("decode_value: {d} {b}\n", .{ value, value });
+
     if (bytes.len == 2) {
         value = bytes[1];
         value = value << 8;
         value += bytes[0];
         // HERE - don't debug this further until you are correctly pulling right number of bytes
         // per instruction
-        std.debug.print("decode_value: {d} {b} {b} {b}\n", .{ value, value, bytes[0], bytes[1] });
+        //std.debug.print("decode_value (2): {d} {b} {b} {b}\n", .{ value, value, bytes[0], bytes[1] });
     }
 
     var str = try std.fmt.allocPrint(alloc, "{d}", .{value});
@@ -169,6 +175,8 @@ fn decode_mov_reg_to_reg(bytes: []u8) Inst {
 
 // Register table is page 162
 fn register_name(reg_code: u8, w: u8) []const u8 {
+    //std.debug.print("reg {b} w: {b}\n", .{ reg_code, w });
+
     return switch (reg_code) {
         0b000 => (if (w == 0) "al" else "ax"),
         0b001 => (if (w == 0) "cl" else "cx"),
