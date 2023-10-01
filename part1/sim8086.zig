@@ -53,6 +53,7 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     while (i < bytes_read) {
         instr = try instruction(buffer[i..], alloc);
         i += instr.bytes_read;
+        std.debug.print("i is {d}, bytes read {d} ", .{ i, bytes_read });
         instr_str = try std.fmt.allocPrint(
             alloc,
             "{s} {s}, {s}",
@@ -156,21 +157,87 @@ fn decode_mov_reg_to_reg(bytes: []u8) Inst {
     // 3 bits are "reg"
     // 3 bits are r/m
     const mod = (byte1 & 0b11000000) >> 6;
-    _ = mod; // we know mod is always 11
-
     const reg = (byte1 & 0b00111000) >> 3;
     const r_m = (byte1 & 0b00000111);
 
-    var reg1 = register_name(reg, w);
-    var reg2 = register_name(r_m, w);
+    // HERE - starting to handle other mod values
+    std.debug.print("mod - {b}, r/m {b}\n\n", .{ mod, r_m });
+    if (mod == 0b11) {
+        var reg1 = register_name(reg, w);
+        var reg2 = register_name(r_m, w);
 
-    if (d == 0) {
-        var temp = reg1;
-        reg1 = reg2;
-        reg2 = temp;
+        if (d == 0) {
+            var temp = reg1;
+            reg1 = reg2;
+            reg2 = temp;
+        }
+
+        std.debug.print("here\n", .{});
+        return Inst{ .name = "mov", .dest = reg1, .source = reg2, .bytes_read = 2 };
+    } else {
+        // TODO - not always true!
+        const bytes_read = 2;
+
+        return Inst{ .name = "mov3", .dest = "foobaz", .source = effective_address_calculation(r_m, mod), .bytes_read = bytes_read };
+    }
+}
+
+fn effective_address_calculation(r_m: u8, mod: u8) []const u8 {
+    std.debug.print("eac --- {b} {b}", .{ r_m, mod });
+
+    if (r_m == 0b000 and mod == 0b00) {
+        return "[bx + si]";
+    } else if (r_m == 0b000 and mod == 0b01) {
+        // TODO - replace d8
+        return "[bx + si + d8]";
+    } else if (r_m == 0b000 and mod == 0b10) {
+        return "[bx + si + d16]";
+    } else if (r_m == 0b001 and mod == 0b00) {
+        return "[bx + di]";
+    } else if (r_m == 0b001 and mod == 0b01) {
+        unreachable;
+    } else if (r_m == 0b001 and mod == 0b10) {
+        unreachable;
+    } else if (r_m == 0b010 and mod == 0b00) {
+        return "[bp + si]";
+    } else if (r_m == 0b010 and mod == 0b01) {
+        unreachable;
+    } else if (r_m == 0b011 and mod == 0b10) {
+        unreachable;
+    } else if (r_m == 0b011 and mod == 0b00) {
+        return "[bp + di]";
+    } else if (r_m == 0b011 and mod == 0b01) {
+        unreachable;
+    } else if (r_m == 0b100 and mod == 0b10) {
+        unreachable;
+    } else if (r_m == 0b100 and mod == 0b00) {
+        unreachable;
+    } else if (r_m == 0b100 and mod == 0b01) {
+        unreachable;
+    } else if (r_m == 0b101 and mod == 0b10) {
+        unreachable;
+    } else if (r_m == 0b101 and mod == 0b00) {
+        unreachable;
+    } else if (r_m == 0b101 and mod == 0b01) {
+        unreachable;
+    } else if (r_m == 0b110 and mod == 0b10) {
+        unreachable;
+    } else if (r_m == 0b110 and mod == 0b00) {
+        unreachable;
+    } else if (r_m == 0b110 and mod == 0b01) {
+        // TODO - d8 should be displacement number
+        return "[bp + d8]";
+    } else if (r_m == 0b111 and mod == 0b10) {
+        unreachable;
+    } else if (r_m == 0b111 and mod == 0b00) {
+        unreachable;
+    } else if (r_m == 0b111 and mod == 0b01) {
+        unreachable;
+    } else if (r_m == 0b000 and mod == 0b01) {} else {
+        unreachable;
     }
 
-    return Inst{ .name = "mov", .dest = reg1, .source = reg2, .bytes_read = 2 };
+    return "flunk";
 }
 
 // Register table is page 162
