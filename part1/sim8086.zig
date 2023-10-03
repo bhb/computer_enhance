@@ -53,7 +53,7 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     while (i < bytes_read) {
         instr = try instruction(buffer[i..], alloc);
         i += instr.bytes_read;
-        std.debug.print("i is {d}, bytes read {d} ", .{ i, bytes_read });
+        std.debug.print("i is {d}, byes read last instr {d}, total bytes to read {d} \n", .{ i, instr.bytes_read, bytes_read });
         instr_str = try std.fmt.allocPrint(
             alloc,
             "{s} {s}, {s}",
@@ -84,12 +84,12 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
 
     const instr_type = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
 
-    //std.debug.print("bytes leng: {d}\n", .{bytes.len});
+    std.debug.print("instr_type: {} {b}\n", .{ instr_type, byte0 });
 
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
         InstType.mov_reg_to_reg => decode_mov_reg_to_reg(bytes),
-        else => Inst{ .name = "unknown", .dest = "none", .source = "none", .bytes_read = 1 },
+        else => unreachable,
     };
 
     return inst;
@@ -108,11 +108,11 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     var bytes_read: u4 = undefined;
 
     if (w == 1) {
-        bytes_read = 2;
+        bytes_read = 3;
         imm_bytes = bytes[1..3];
         //std.debug.print("imm_bytes 1: {b} {b} {d}\n", .{ imm_bytes[0], imm_bytes[1], imm_bytes.len });
     } else {
-        bytes_read = 1;
+        bytes_read = 2;
         imm_bytes = bytes[1..2];
         //std.debug.print("imm_bytes 2: {d} {d}\n", .{ imm_bytes[0], imm_bytes.len });
     }
@@ -172,18 +172,24 @@ fn decode_mov_reg_to_reg(bytes: []u8) Inst {
             reg2 = temp;
         }
 
-        std.debug.print("here\n", .{});
         return Inst{ .name = "mov", .dest = reg1, .source = reg2, .bytes_read = 2 };
     } else {
-        // TODO - not always true!
-        const bytes_read = 2;
+        var bytes_read: u4 = undefined;
+
+        if (mod == 0b01) {
+            bytes_read = 1;
+        } else if (mod == 0b10) {
+            bytes_read = 2;
+        } else if (mod == 0b00 and r_m == 0b110) {
+            unreachable;
+        }
 
         return Inst{ .name = "mov3", .dest = "foobaz", .source = effective_address_calculation(r_m, mod), .bytes_read = bytes_read };
     }
 }
 
 fn effective_address_calculation(r_m: u8, mod: u8) []const u8 {
-    std.debug.print("eac --- {b} {b}", .{ r_m, mod });
+    std.debug.print("eac --- {b} {b}\n", .{ r_m, mod });
 
     if (r_m == 0b000 and mod == 0b00) {
         return "[bx + si]";
