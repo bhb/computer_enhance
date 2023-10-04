@@ -53,7 +53,7 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     while (i < bytes_read) {
         instr = try instruction(buffer[i..], alloc);
         i += instr.bytes_read;
-        std.debug.print("i is {d}, byes read last instr {d}, total bytes to read {d} \n", .{ i, instr.bytes_read, bytes_read });
+        std.debug.print("i is {d}, bytes read last instr {d}, total bytes to read {d} \n", .{ i, instr.bytes_read, bytes_read });
         instr_str = try std.fmt.allocPrint(
             alloc,
             "{s} {s}, {s}",
@@ -134,8 +134,6 @@ fn decode_value(bytes: []u8, alloc: Allocator) ![]const u8 {
         value = bytes[1];
         value = value << 8;
         value += bytes[0];
-        // HERE - don't debug this further until you are correctly pulling right number of bytes
-        // per instruction
         //std.debug.print("decode_value (2): {d} {b} {b} {b}\n", .{ value, value, bytes[0], bytes[1] });
     }
 
@@ -174,17 +172,21 @@ fn decode_mov_reg_to_reg(bytes: []u8) Inst {
 
         return Inst{ .name = "mov", .dest = reg1, .source = reg2, .bytes_read = 2 };
     } else {
-        var bytes_read: u4 = undefined;
+        var bytes_read: u4 = 2;
 
         if (mod == 0b01) {
-            bytes_read = 1;
+            bytes_read += 1;
         } else if (mod == 0b10) {
-            bytes_read = 2;
+            bytes_read += 2;
         } else if (mod == 0b00 and r_m == 0b110) {
             unreachable;
+        } else {
+            bytes_read += 0;
         }
 
-        return Inst{ .name = "mov3", .dest = "foobaz", .source = effective_address_calculation(r_m, mod), .bytes_read = bytes_read };
+        const reg_name = register_name(reg, w);
+
+        return Inst{ .name = "mov3", .dest = reg_name, .source = effective_address_calculation(r_m, mod), .bytes_read = bytes_read };
     }
 }
 
