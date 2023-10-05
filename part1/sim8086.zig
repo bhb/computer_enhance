@@ -53,7 +53,7 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     while (i < bytes_read) {
         instr = try instruction(buffer[i..], alloc);
         i += instr.bytes_read;
-        std.debug.print("i is {d}, bytes read last instr {d}, total bytes to read {d} \n", .{ i, instr.bytes_read, bytes_read });
+        //std.debug.print("i is {d}, bytes read last instr {d}, total bytes to read {d} \n", .{ i, instr.bytes_read, bytes_read });
         instr_str = try std.fmt.allocPrint(
             alloc,
             "{s} {s}, {s}",
@@ -84,7 +84,7 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
 
     const instr_type = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
 
-    std.debug.print("instr_type: {} {b}\n", .{ instr_type, byte0 });
+    //std.debug.print("instr_type: {} {b}\n", .{ instr_type, byte0 });
 
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
@@ -116,14 +116,14 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     }
 
     return Inst{
-        .name = "mov2",
+        .name = "mov",
         .dest = reg,
-        .source = try decode_value(imm_bytes, alloc),
+        .source = try decode_value_str(imm_bytes, alloc),
         .bytes_read = bytes_read,
     };
 }
 
-fn decode_value(bytes: []u8, alloc: Allocator) ![]const u8 {
+fn decode_value(bytes: []u8) u16 {
     var value: u16 = bytes[0];
 
     //std.debug.print("decode_value: {d} {b}\n", .{ value, value });
@@ -134,6 +134,12 @@ fn decode_value(bytes: []u8, alloc: Allocator) ![]const u8 {
         value += bytes[0];
         //std.debug.print("decode_value (2): {d} {b} {b} {b}\n", .{ value, value, bytes[0], bytes[1] });
     }
+
+    return value;
+}
+
+fn decode_value_str(bytes: []u8, alloc: Allocator) ![]const u8 {
+    const value = decode_value(bytes);
 
     var str = try std.fmt.allocPrint(alloc, "{d}", .{value});
 
@@ -156,8 +162,7 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     const reg = (byte1 & 0b00111000) >> 3;
     const r_m = (byte1 & 0b00000111);
 
-    // HERE - starting to handle other mod values
-    std.debug.print("mod - {b}, r/m {b}\n\n", .{ mod, r_m });
+    //std.debug.print("mod - {b}, r/m {b}\n\n", .{ mod, r_m });
     if (mod == 0b11) {
         var reg1 = register_name(reg, w);
         var reg2 = register_name(r_m, w);
@@ -186,21 +191,30 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
 
         const eac = try effective_address_calculation(r_m, mod, bytes[2..4], alloc);
 
-        return Inst{ .name = "mov3", .dest = reg_name, .source = eac, .bytes_read = bytes_read };
+        var dest = reg_name;
+        var source = eac;
+
+        if (d == 0) {
+            var temp = dest;
+            dest = source;
+            source = temp;
+        }
+
+        return Inst{ .name = "mov", .dest = dest, .source = source, .bytes_read = bytes_read };
     }
 }
 
 fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, alloc: Allocator) ![]const u8 {
-    std.debug.print("eac --- {b} {b}\n", .{ r_m, mod });
+    //std.debug.print("eac --- {b} {b}\n", .{ r_m, mod });
 
     if (r_m == 0b000 and mod == 0b00) {
         return "[bx + si]";
     } else if (r_m == 0b000 and mod == 0b01) {
-        // TODO - replace d8
-        const value = try decode_value(bytes[0..1], alloc);
-        return try std.fmt.allocPrint(alloc, "[bx + si + {s}]", .{value});
+        const value = decode_value(bytes[0..1]);
+        return try std.fmt.allocPrint(alloc, "[bx + si + {d}]", .{value});
     } else if (r_m == 0b000 and mod == 0b10) {
-        return "[bx + si + d16]";
+        const value = decode_value(bytes[0..2]);
+        return try std.fmt.allocPrint(alloc, "[bx + si + {d}]", .{value});
     } else if (r_m == 0b001 and mod == 0b00) {
         return "[bx + di]";
     } else if (r_m == 0b001 and mod == 0b01) {
@@ -234,8 +248,12 @@ fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, alloc: Allocator
     } else if (r_m == 0b110 and mod == 0b00) {
         unreachable;
     } else if (r_m == 0b110 and mod == 0b01) {
-        // TODO - d8 should be displacement number
-        return "[bp + d8]";
+        const value = decode_value(bytes[0..1]);
+        if (value == 0) {
+            return "[bp]";
+        } else {
+            return try std.fmt.allocPrint(alloc, "[bp + {d}]", .{value});
+        }
     } else if (r_m == 0b111 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b111 and mod == 0b00) {
