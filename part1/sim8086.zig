@@ -112,7 +112,7 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     return Inst{
         .name = "mov",
         .dest = reg,
-        .source = try decode_value_str(imm_bytes, alloc),
+        .source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes)}),
         .bytes_read = bytes_read,
     };
 }
@@ -127,14 +127,6 @@ fn decode_value(bytes: []u8) u16 {
     }
 
     return value;
-}
-
-fn decode_value_str(bytes: []u8, alloc: Allocator) ![]const u8 {
-    const value = decode_value(bytes);
-
-    var str = try std.fmt.allocPrint(alloc, "{d}", .{value});
-
-    return str;
 }
 
 fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
