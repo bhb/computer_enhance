@@ -18,12 +18,9 @@ const stdout = std.io.getStdOut().writer();
 
 const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: u4 };
 const InstType = enum { mov_reg_to_reg, mov_imm_to_reg, unknown };
+const EffAddressCalc = struct { registers: []const u8, displacement: u16 = 0 };
 
 pub fn main() !void {
-    //var x: u16 = 3948;
-
-    //std.debug.print("{b}, {b}, {b}\n\n", .{ x, (~x + 1), 61588 });
-
     var buffer: [3000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
@@ -53,7 +50,6 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     while (i < bytes_read) {
         instr = try instruction(buffer[i..], alloc);
         i += instr.bytes_read;
-        //std.debug.print("i is {d}, bytes read last instr {d}, total bytes to read {d} \n", .{ i, instr.bytes_read, bytes_read });
         instr_str = try std.fmt.allocPrint(
             alloc,
             "{s} {s}, {s}",
@@ -83,8 +79,6 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
     };
 
     const instr_type = four_bit_instruction orelse six_bit_instruction orelse InstType.unknown;
-
-    //std.debug.print("instr_type: {} {b}\n", .{ instr_type, byte0 });
 
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
@@ -126,13 +120,10 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
 fn decode_value(bytes: []u8) u16 {
     var value: u16 = bytes[0];
 
-    //std.debug.print("decode_value: {d} {b}\n", .{ value, value });
-
     if (bytes.len == 2) {
         value = bytes[1];
         value = value << 8;
         value += bytes[0];
-        //std.debug.print("decode_value (2): {d} {b} {b} {b}\n", .{ value, value, bytes[0], bytes[1] });
     }
 
     return value;
@@ -162,7 +153,6 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     const reg = (byte1 & 0b00111000) >> 3;
     const r_m = (byte1 & 0b00000111);
 
-    //std.debug.print("mod - {b}, r/m {b}\n\n", .{ mod, r_m });
     if (mod == 0b11) {
         var reg1 = register_name(reg, w);
         var reg2 = register_name(r_m, w);
@@ -189,10 +179,16 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
 
         const reg_name = register_name(reg, w);
 
-        const eac = try effective_address_calculation(r_m, mod, bytes[2..4], alloc);
+        const eac = effective_address_calculation(r_m, mod, bytes[2..4]);
 
         var dest = reg_name;
-        var source = eac;
+        var source: []const u8 = undefined;
+
+        if (eac.displacement == 0) {
+            source = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
+        } else {
+            source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
+        }
 
         if (d == 0) {
             var temp = dest;
@@ -204,31 +200,29 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     }
 }
 
-fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, alloc: Allocator) ![]const u8 {
-    //std.debug.print("eac --- {b} {b}\n", .{ r_m, mod });
-
+fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8) EffAddressCalc {
     if (r_m == 0b000 and mod == 0b00) {
-        return "[bx + si]";
+        return EffAddressCalc{ .registers = "bx + si" };
     } else if (r_m == 0b000 and mod == 0b01) {
         const value = decode_value(bytes[0..1]);
-        return try std.fmt.allocPrint(alloc, "[bx + si + {d}]", .{value});
+        return EffAddressCalc{ .registers = "bx + si", .displacement = value };
     } else if (r_m == 0b000 and mod == 0b10) {
         const value = decode_value(bytes[0..2]);
-        return try std.fmt.allocPrint(alloc, "[bx + si + {d}]", .{value});
+        return EffAddressCalc{ .registers = "bx + si", .displacement = value };
     } else if (r_m == 0b001 and mod == 0b00) {
-        return "[bx + di]";
+        return EffAddressCalc{ .registers = "bx + di" };
     } else if (r_m == 0b001 and mod == 0b01) {
         unreachable;
     } else if (r_m == 0b001 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b010 and mod == 0b00) {
-        return "[bp + si]";
+        return EffAddressCalc{ .registers = "bp + si" };
     } else if (r_m == 0b010 and mod == 0b01) {
         unreachable;
     } else if (r_m == 0b011 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b011 and mod == 0b00) {
-        return "[bp + di]";
+        return EffAddressCalc{ .registers = "bp + di" };
     } else if (r_m == 0b011 and mod == 0b01) {
         unreachable;
     } else if (r_m == 0b100 and mod == 0b10) {
@@ -249,11 +243,7 @@ fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, alloc: Allocator
         unreachable;
     } else if (r_m == 0b110 and mod == 0b01) {
         const value = decode_value(bytes[0..1]);
-        if (value == 0) {
-            return "[bp]";
-        } else {
-            return try std.fmt.allocPrint(alloc, "[bp + {d}]", .{value});
-        }
+        return EffAddressCalc{ .registers = "bp", .displacement = value };
     } else if (r_m == 0b111 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b111 and mod == 0b00) {
@@ -264,13 +254,11 @@ fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, alloc: Allocator
         unreachable;
     }
 
-    return "flunk";
+    unreachable;
 }
 
 // Register table is page 162
 fn register_name(reg_code: u8, w: u8) []const u8 {
-    //std.debug.print("reg {b} w: {b}\n", .{ reg_code, w });
-
     return switch (reg_code) {
         0b000 => (if (w == 0) "al" else "ax"),
         0b001 => (if (w == 0) "cl" else "cx"),
