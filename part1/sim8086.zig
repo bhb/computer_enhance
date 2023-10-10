@@ -6,9 +6,13 @@
 // Tables on page 162
 // Immediate to register is page 164
 
+// Homework 3
+// Files: 0041
+// Page 165, 166 for add, sub, cmp
+// Page 168 for jmp
+
 // Usage:
-// zig run sim8086.zig -- listing_0037_many_register_mov
-// zig run sim8086.zig -- listing_0038_many_register_mov
+// zig run sim8086.zig -- <binary file>
 
 const std = @import("std");
 const fs = std.fs;
@@ -17,7 +21,7 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 
 const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: u4 };
-const InstType = enum { mov_reg_to_reg, mov_imm_to_reg, unknown };
+const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, add_sub_cmp, add_sub_cmp_imm, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: u16 = 0 };
 
 pub fn main() !void {
@@ -74,7 +78,8 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
     };
 
     const six_bit_instruction = switch (six_bit_inst_code) {
-        0b100010 => InstType.mov_reg_to_reg,
+        0b100010 => InstType.mov_regmem_to_regmem,
+        0b000000, 0b100000, 0b000001 => InstType.add_sub_cmp,
         else => null,
     };
 
@@ -82,11 +87,43 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
 
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
-        InstType.mov_reg_to_reg => try decode_mov_reg_to_reg(bytes, alloc),
+        InstType.mov_regmem_to_regmem => try decode_mov_regmem_to_regmem(bytes, alloc),
+        InstType.add_sub_cmp => try decode_add_sub_cmp(six_bit_inst_code, bytes, alloc),
         else => unreachable,
     };
 
     return inst;
+}
+
+fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
+    const foo = try std.fmt.allocPrint(alloc, "{d}", .{2});
+    _ = foo;
+
+    const sub_code = switch (instr) {
+        0b100000 => blk: {
+            break :blk bytes[1] & 0b0011100;
+        },
+        else => blk: {
+            break :blk instr & 0b001110;
+        },
+    };
+
+    switch (sub_code) {
+        0b000 => {
+            // TODO: not accurate bytes_read
+            //return Inst{ .name = "add", .source = "add-source", .dest = "add-dest", .bytes_read = 1 };
+            return decode_xxx_regmem_to_regmem("add", bytes, alloc);
+        },
+        0b101 => {
+            // TODO: not accurate bytes_read
+            return Inst{ .name = "sub", .source = "sub-source", .dest = "sub-dest", .bytes_read = 1 };
+        },
+        0b111 => {
+            // TODO: not accurate bytes_read
+            return Inst{ .name = "cmp", .source = "sub-source", .dest = "sub-dest", .bytes_read = 1 };
+        },
+        else => unreachable,
+    }
 }
 
 fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
@@ -129,7 +166,12 @@ fn decode_value(bytes: []u8) u16 {
     return value;
 }
 
-fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
+fn decode_mov_regmem_to_regmem(bytes: []u8, alloc: Allocator) !Inst {
+    return decode_xxx_regmem_to_regmem("mov", bytes, alloc);
+}
+
+// rm = register or memory
+fn decode_xxx_regmem_to_regmem(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
     const byte0 = bytes[0];
     const byte1 = bytes[1];
 
@@ -155,7 +197,7 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
             reg2 = temp;
         }
 
-        return Inst{ .name = "mov", .dest = reg1, .source = reg2, .bytes_read = 2 };
+        return Inst{ .name = op, .dest = reg1, .source = reg2, .bytes_read = 2 };
     } else {
         var bytes_read: u4 = 2;
 
@@ -188,7 +230,7 @@ fn decode_mov_reg_to_reg(bytes: []u8, alloc: Allocator) !Inst {
             source = temp;
         }
 
-        return Inst{ .name = "mov", .dest = dest, .source = source, .bytes_read = bytes_read };
+        return Inst{ .name = op, .dest = dest, .source = source, .bytes_read = bytes_read };
     }
 }
 
