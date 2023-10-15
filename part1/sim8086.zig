@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const stdout = std.io.getStdOut().writer();
 
-const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: u4 };
+const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: usize };
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, add_sub_cmp, add_sub_cmp_imm, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: u16 = 0 };
 
@@ -95,9 +95,6 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
 }
 
 fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
-    const foo = try std.fmt.allocPrint(alloc, "{d}", .{2});
-    _ = foo;
-
     const sub_code = switch (instr) {
         0b100000 => blk: {
             break :blk bytes[1] & 0b00111000;
@@ -106,8 +103,6 @@ fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
             break :blk instr & 0b001110;
         },
     };
-
-    //std.debug.print("bytes[0] {b}, bytes[1] {b}, instr: {b}, sub_code {b}\n", .{ bytes[0], bytes[1], instr, sub_code });
 
     const op = switch (sub_code) {
         0b000 => "add",
@@ -118,7 +113,7 @@ fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
 
     switch (instr) {
         0b100000 => {
-            std.debug.print("bytes[0] {b}, bytes[1] {b}, instr: {b}, sub_code {b}\n", .{ bytes[0], bytes[1], instr, sub_code });
+            //std.debug.print("bytes[0] {b}, bytes[1] {b}, instr: {b}, sub_code {b}\n", .{ bytes[0], bytes[1], instr, sub_code });
             return decode_any_imm_to_memreg(op, bytes, alloc);
         },
         else => {
@@ -128,62 +123,7 @@ fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
 }
 
 fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
-    return decode_any_imm_to_reg("mov", bytes, alloc);
-}
-
-fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
-    const byte0 = bytes[0];
-    const byte1 = bytes[1];
-
-    const wide = (byte0 & 0b00000001) == 1;
-    const signed = (byte0 & 0b00000010) == 1;
-    const mod = (byte1 & 0b11000000) >> 6;
-    const r_m = (byte1 & 0b00000111);
-
-    std.debug.print("w: {}, mod: {b}, r_m: {b}\n", .{ wide, mod, r_m });
-
-    const reg = register_name(r_m, wide);
-
-    // TODO - what do I need imm_bytes for?
-    var imm_bytes: []u8 = undefined;
-
-    var bytes_read: u4 = undefined;
-
-    std.debug.print("all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
-
-    var source: []const u8 = undefined;
-
-    // define a slice using the [start..end] syntax. slice begins at array[1] and ends just before array[4].
-    if (mod == 0b11) {
-        if (signed and wide) {
-            bytes_read = 4;
-            imm_bytes = bytes[2..4];
-        } else {
-            bytes_read = 3;
-            imm_bytes = bytes[2..3];
-        }
-        source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
-    } else {
-        // TODO - refactor to avoid duplication
-        const eac = effective_address_calculation(r_m, mod, bytes[2..], signed);
-
-        if (eac.displacement == 0) {
-            source = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-        } else {
-            source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
-        }
-    }
-
-    return Inst{
-        .name = op,
-        .dest = reg,
-        .source = source,
-        .bytes_read = bytes_read,
-    };
-}
-
-// TODO - not actually useful as "any" method
-fn decode_any_imm_to_reg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+    const op = "mov";
     const byte0 = bytes[0];
 
     const wide = ((byte0 & 0b00001000) >> 3) == 1;
@@ -213,6 +153,58 @@ fn decode_any_imm_to_reg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
     };
 }
 
+fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+    const byte0 = bytes[0];
+    const byte1 = bytes[1];
+
+    const wide = (byte0 & 0b00000001) == 1;
+    const signed = (byte0 & 0b00000010) == 1;
+    const mod = (byte1 & 0b11000000) >> 6;
+    const r_m = (byte1 & 0b00000111);
+    const reg = register_name(r_m, wide);
+
+    std.debug.print("w: {}, mod: {b}, r_m: {b}\n", .{ wide, mod, r_m });
+
+    var bytes_read: usize = 2;
+
+    std.debug.print("all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
+
+    var source: []const u8 = undefined;
+
+    if (mod == 0b11) {
+        // mod == 11 is "register mode", so there are no displacement bytes
+        var imm_bytes: []u8 = undefined;
+
+        if (signed and wide) {
+            // define a slice using the [start..end] syntax. slice begins at array[1] and ends just before array[4].
+            imm_bytes = bytes[2..4];
+        } else {
+            imm_bytes = bytes[2..3];
+        }
+
+        bytes_read += imm_bytes.len;
+        source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+    } else {
+        unreachable;
+
+        // TODO - refactor to avoid duplication
+        // const eac = effective_address_calculation(r_m, mod, bytes[2..], signed);
+
+        // if (eac.displacement == 0) {
+        //     source = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
+        // } else {
+        //     source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
+        // }
+    }
+
+    return Inst{
+        .name = op,
+        .dest = reg,
+        .source = source,
+        .bytes_read = bytes_read,
+    };
+}
+
 fn decode_value(bytes: []u8, signed: bool) u16 {
     std.debug.print("bytes! {b}, signed: {}\n\n", .{ bytes, signed });
 
@@ -229,7 +221,6 @@ fn decode_value(bytes: []u8, signed: bool) u16 {
     // "Sign extend 8-bit immediate data to 16 bits if W=1"
     // "If the displacement is only a single byte, the 8086 or 8088 automatically sign-extends this quantity to 16-bits before using the information in further address calculation"
 
-    // HERE - need to check if the first bit is zero or one,  but
     // before that, I should be getting the correct value
     // if (signed) {
     //     value = (value - 1);
@@ -358,7 +349,8 @@ fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, signed: bool) Ef
     } else if (r_m == 0b111 and mod == 0b00) {
         unreachable;
     } else if (r_m == 0b111 and mod == 0b01) {
-        unreachable;
+        const value = decode_value(bytes[0..1], signed);
+        return EffAddressCalc{ .registers = "bx", .displacement = value };
     } else if (r_m == 0b000 and mod == 0b01) {} else {
         const value = decode_value(bytes[0..1], signed);
         return EffAddressCalc{ .registers = "bx + si", .displacement = value };
