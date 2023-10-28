@@ -30,11 +30,11 @@ const Allocator = std.mem.Allocator;
 const stdout = std.io.getStdOut().writer();
 
 const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: usize };
-const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, add_sub_cmp, add_sub_cmp_imm, add_sub_cmp7, unknown }; // TODO add_sub_cmp7 is confusing
+const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1 };
 
 pub fn main() !void {
-    var buffer: [3000]u8 = undefined;
+    var buffer: [1000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
 
@@ -50,34 +50,25 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
 
-    var buffer: [100]u8 = undefined;
+    var buffer: [1000]u8 = undefined;
     try file.seekTo(0);
     const bytes_read = try file.readAll(&buffer);
 
+    var i: usize = 0;
+
     try stdout.print("bits 16\n\n", .{});
 
-    var i: usize = 0;
-    var instr: Inst = undefined;
-    var instr_str: []const u8 = undefined;
-
     while (i < bytes_read) {
-        instr = try instruction(buffer[i..], alloc);
+        var instr = try decode_instruction(buffer[i..], alloc);
+        try stdout.print("{s} {s}, {s}\n", .{ instr.name, instr.dest, instr.source });
         i += instr.bytes_read;
-        instr_str = try std.fmt.allocPrint(
-            alloc,
-            "{s} {s}, {s}",
-            .{ instr.name, instr.dest, instr.source },
-        );
-        try stdout.print("{s}\n", .{instr_str});
     }
 }
 
-fn instruction(bytes: []u8, alloc: Allocator) !Inst {
-    const byte0 = bytes[0];
-
-    const four_bit_inst_code = (byte0 & 0b11110000) >> 4;
-    const six_bit_inst_code = (byte0 & 0b11111100) >> 2;
-    const seven_bit_inst_code = (byte0 & 0b11111110) >> 1;
+fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
+    const four_bit_inst_code = nth_bits(u8, bytes[0], 4, 4);
+    const six_bit_inst_code = nth_bits(u8, bytes[0], 2, 6);
+    const seven_bit_inst_code = nth_bits(u8, bytes[0], 1, 7);
 
     const four_bit_instruction = switch (four_bit_inst_code) {
         0b1011 => InstType.mov_imm_to_reg,
@@ -86,32 +77,37 @@ fn instruction(bytes: []u8, alloc: Allocator) !Inst {
 
     const six_bit_instruction = switch (six_bit_inst_code) {
         0b100010 => InstType.mov_regmem_to_regmem,
-        0b000000, 0b100000 => InstType.add_sub_cmp,
+        0b000000 => InstType.any_regmem_to_regmem,
+        0b100000 => InstType.any_imm_to_regmem,
         else => null,
     };
 
     const seven_bit_instruction = switch (seven_bit_inst_code) {
-        // TODO - refactor
-        0b0000010 => InstType.add_sub_cmp7,
+        0b0000010 => InstType.any_imm_to_acc,
         else => null,
     };
 
     const instr_type = seven_bit_instruction orelse six_bit_instruction orelse four_bit_instruction orelse InstType.unknown;
 
-    //std.debug.print("byte0 {b}, 4b {}, 6b {}, 7b {}, instr_type: {}\n", .{ bytes[0], four_bit_inst_code, six_bit_inst_code, seven_bit_inst_code, instr_type });
-
+    const op_name = switch (instr_type) {
+        InstType.any_regmem_to_regmem => subcode_op_name(six_bit_inst_code, bytes),
+        InstType.any_imm_to_acc => subcode_op_name(six_bit_inst_code, bytes),
+        InstType.any_imm_to_regmem => subcode_op_name(six_bit_inst_code, bytes),
+        else => "n/a",
+    };
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
-        InstType.mov_regmem_to_regmem => try decode_mov_regmem_to_regmem(bytes, alloc),
-        InstType.add_sub_cmp => try decode_add_sub_cmp(six_bit_inst_code, bytes, alloc),
-        InstType.add_sub_cmp7 => try any_imm_to_acc("add", bytes, alloc),
+        InstType.mov_regmem_to_regmem => try decode_any_regmem_to_regmem("mov", bytes, alloc),
+        InstType.any_regmem_to_regmem => try decode_any_regmem_to_regmem(op_name, bytes, alloc),
+        InstType.any_imm_to_acc => try decode_any_imm_to_acc(op_name, bytes, alloc),
+        InstType.any_imm_to_regmem => try decode_any_imm_to_memreg(op_name, bytes, alloc),
         else => unreachable,
     };
 
     return inst;
 }
 
-fn any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+fn decode_any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
     //std.debug.print("...all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
 
     const wide = (bytes[0] & 0b00000001) == 1;
@@ -137,7 +133,7 @@ fn any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
     };
 }
 
-fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
+fn subcode_op_name(instr: u8, bytes: []u8) []const u8 {
     const sub_code = switch (instr) {
         0b100000 => blk: {
             break :blk bytes[1] & 0b00111000;
@@ -154,29 +150,14 @@ fn decode_add_sub_cmp(instr: u8, bytes: []u8, alloc: Allocator) !Inst {
         else => unreachable,
     };
 
-    //std.debug.print("[decode_add_sub_cmp] bytes[0] {b}, bytes[1] {b}, instr: {b}, sub_code {b}\n", .{ bytes[0], bytes[1], instr, sub_code });
-
-    // TODO - refactor back to top-level, since we need to to call 'any_imm_to_acc' from top-level
-    switch (instr) {
-        0b000000 => {
-            return decode_any_regmem_to_regmem(op, bytes, alloc);
-        },
-        0b100000 => {
-            //std.debug.print("bytes[0] {b}, bytes[1] {b}, instr: {b}, sub_code {b}\n", .{ bytes[0], bytes[1], instr, sub_code });
-            return decode_any_imm_to_memreg(op, bytes, alloc);
-        },
-        else => {
-            unreachable;
-        },
-    }
+    return op;
 }
 
 fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     const op = "mov";
-    const byte0 = bytes[0];
 
-    const wide = ((byte0 & 0b00001000) >> 3) == 1;
-    const reg_code = (byte0 & 0b00000111);
+    const wide = ((bytes[0] & 0b00001000) >> 3) == 1;
+    const reg_code = (bytes[0] & 0b00000111);
 
     const reg = register_name(reg_code, wide);
 
@@ -202,28 +183,35 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     };
 }
 
-fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
-    const byte0 = bytes[0];
-    const byte1 = bytes[1];
+fn eac_string(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, alloc: Allocator) ![]const u8 {
+    const eac = effective_address_calculation(r_m, mod, bytes, signed);
+    var str: []const u8 = undefined;
+    if (eac.displacement == -1) {
+        str = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
+    } else {
+        str = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
+    }
 
-    const wide = (byte0 & 0b00000001) == 1;
-    const signed = nth_bit(byte0, 1) == 1;
-    const mod = (byte1 & 0b11000000) >> 6;
-    const r_m = (byte1 & 0b00000111);
+    const prefix = if (wide) "word" else "byte";
+    return try std.fmt.allocPrint(alloc, "{s} {s}", .{ prefix, str });
+}
+
+fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+    const wide = nth_bits(u8, bytes[0], 0, 1) == 1;
+    const signed = nth_bits(u8, bytes[0], 1, 1) == 1;
+    const mod = (bytes[1] & 0b11000000) >> 6;
+    const r_m = (bytes[1] & 0b00000111);
     var dest: []const u8 = undefined;
 
-    std.debug.print("w: {}, mod: {b}, r_m: {b}, wide {}, signed {}\n", .{ wide, mod, r_m, wide, signed });
+    //std.debug.print("w: {}, mod: {b}, r_m: {b}, wide {}, signed {}\n", .{ wide, mod, r_m, wide, signed });
 
     var bytes_read: usize = 2;
 
-    std.debug.print("all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
+    //std.debug.print("all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
 
     var source: []u8 = undefined;
     var imm_bytes: []u8 = undefined;
 
-    // HERE - I think my usage of signed is wrong.
-    // Note this comment:
-    // "In the table you’ll see: “data | data if s: w = 01”. So there is only a second data byte if s is 0 and w is 1."
     if (mod == 0b11) {
         // mod == 11 is "register mode", so there are no displacement bytes
         const reg = register_name(r_m, wide);
@@ -236,13 +224,10 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
         }
 
         bytes_read += imm_bytes.len;
-        dest = reg;
-        //std.debug.print("here \n", .{});
         source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+        dest = reg;
     } else if ((mod == 0b00)) {
         // memory mode, no displacement follows
-        const eac = effective_address_calculation(r_m, mod, bytes[2..], signed);
-
         if (!signed and wide) {
             // define a slice using the [start..end] syntax. slice begins at array[start] and ends just before array[end].
             imm_bytes = bytes[2..4];
@@ -251,21 +236,10 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
         }
 
         bytes_read += imm_bytes.len;
-
-        if (eac.displacement == -1) {
-            dest = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-        } else {
-            dest = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
-        }
-
-        std.debug.print("imm bytes length {}, wide {}, signed {} \n", .{ imm_bytes.len, wide, signed });
-        const prefix = if (wide) "word" else "byte";
-        dest = try std.fmt.allocPrint(alloc, "{s} {s}", .{ prefix, dest });
-
         source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+        dest = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc);
     } else if (mod == 0b10) {
-        const eac = effective_address_calculation(r_m, mod, bytes[2..], signed);
-
+        // memory mode, 16-bit displacement
         if (!signed and wide) {
             // define a slice using the [start..end] syntax. slice begins at array[1] and ends just before array[4].
             imm_bytes = bytes[4..6];
@@ -274,18 +248,8 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
         }
 
         bytes_read += 2 + imm_bytes.len;
-
-        if (eac.displacement == -1) {
-            dest = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-        } else {
-            dest = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
-        }
-
-        std.debug.print("imm bytes length {}, wide {}, signed {} \n", .{ imm_bytes.len, wide, signed });
-        const prefix = if (wide) "word" else "byte";
-        dest = try std.fmt.allocPrint(alloc, "{s} {s}", .{ prefix, dest });
-
         source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+        dest = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc);
     } else {
         //std.debug.print("mod {b}\n\n", .{mod});
         unreachable;
@@ -299,10 +263,33 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
     };
 }
 
-fn nth_bit(value: i32, comptime k: u4) i32 {
-    const bitmask = (1 << k);
+// get the bit at the kth position (from the right)
+// for n biths
+fn nth_bits(comptime T: type, value: T, comptime k: u4, comptime n: u4) T {
+    var i: u4 = 1;
+    var bitmask: T = 1;
+
+    while (i < n) {
+        bitmask = bitmask << 1;
+        bitmask += 1;
+        i += 1;
+    }
+
+    bitmask = (bitmask << k);
+
     const masked = (value & bitmask);
     return masked >> k;
+}
+
+test "nth_bits" {
+    try std.testing.expectEqual(@as(i32, 1), nth_bits(u8, 0b0000_0001, 0, 1));
+    try std.testing.expectEqual(@as(i32, 0), nth_bits(u8, 0b0000_0001, 1, 1));
+
+    try std.testing.expectEqual(@as(i32, 1), nth_bits(u8, 0b1111_1111, 1, 1));
+    try std.testing.expectEqual(@as(i32, 1), nth_bits(u8, 0b1111_1111, 7, 1));
+
+    try std.testing.expectEqual(@as(i32, 3), nth_bits(u8, 0b1111_1111, 0, 2));
+    try std.testing.expectEqual(@as(i32, 7), nth_bits(u8, 0b1111_1111, 0, 3));
 }
 
 fn decode_value(bytes: []u8, signed: bool) i32 {
@@ -314,7 +301,7 @@ fn decode_value(bytes: []u8, signed: bool) i32 {
         value = value << 8;
         value += bytes[0];
 
-        if (signed and nth_bit(value, 15) == 1) {
+        if (signed and nth_bits(u16, value, 15, 1) == 1) {
             value = ~(value - 1);
             const ret: i16 = @intCast(value);
             return -ret;
@@ -326,7 +313,7 @@ fn decode_value(bytes: []u8, signed: bool) i32 {
     } else {
         var value: u8 = bytes[0];
 
-        if (signed and nth_bit(value, 7) == 1) {
+        if (signed and nth_bits(u8, value, 7, 1) == 1) {
             value = ~(value - 1);
             const ret: i16 = @intCast(value);
             return -ret;
@@ -341,28 +328,21 @@ fn decode_value(bytes: []u8, signed: bool) i32 {
     // "If the displacement is only a single byte, the 8086 or 8088 automatically sign-extends this quantity to 16-bits before using the information in further address calculation"
 }
 
-fn decode_mov_regmem_to_regmem(bytes: []u8, alloc: Allocator) !Inst {
-    return decode_any_regmem_to_regmem("mov", bytes, alloc);
-}
-
 // rm = register or memory
 fn decode_any_regmem_to_regmem(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
     const signed = false;
 
-    const byte0 = bytes[0];
-    const byte1 = bytes[1];
-
     // 2 bits are "DW" (one bit each)
     // page 161 of manual
-    const d = (byte0 & 0b00000010) >> 1;
-    const wide = ((byte0 & 0b00000001) == 1);
+    const d = (bytes[0] & 0b00000010) >> 1;
+    const wide = ((bytes[0] & 0b00000001) == 1);
 
     // 2 bits are "mod"
     // 3 bits are "reg"
     // 3 bits are r/m
-    const mod = (byte1 & 0b11000000) >> 6;
-    const reg = (byte1 & 0b00111000) >> 3;
-    const r_m = (byte1 & 0b00000111);
+    const mod = (bytes[1] & 0b11000000) >> 6;
+    const reg = (bytes[1] & 0b00111000) >> 3;
+    const r_m = (bytes[1] & 0b00000111);
 
     if (mod == 0b11) {
         var reg1 = register_name(reg, wide);
