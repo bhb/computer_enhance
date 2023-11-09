@@ -31,10 +31,10 @@ const stdout = std.io.getStdOut().writer();
 
 const Inst = struct { name: []const u8, dest: []const u8, source: []const u8, bytes_read: usize };
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, unknown };
-const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1 };
+const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
 pub fn main() !void {
-    var buffer: [1000]u8 = undefined;
+    var buffer: [2000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
 
@@ -77,13 +77,13 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
 
     const six_bit_instruction = switch (six_bit_inst_code) {
         0b100010 => InstType.mov_regmem_to_regmem,
-        0b000000 => InstType.any_regmem_to_regmem,
+        0b000000, 0b001010, 0b001110 => InstType.any_regmem_to_regmem,
         0b100000 => InstType.any_imm_to_regmem,
         else => null,
     };
 
     const seven_bit_instruction = switch (seven_bit_inst_code) {
-        0b0000010 => InstType.any_imm_to_acc,
+        0b0000010, 0b0010110, 0b001110 => InstType.any_imm_to_acc,
         else => null,
     };
 
@@ -136,12 +136,14 @@ fn decode_any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
 fn subcode_op_name(instr: u8, bytes: []u8) []const u8 {
     const sub_code = switch (instr) {
         0b100000 => blk: {
-            break :blk bytes[1] & 0b00111000;
+            break :blk nth_bits(u8, bytes[1], 3, 3);
         },
         else => blk: {
-            break :blk instr & 0b001110;
+            break :blk nth_bits(u8, bytes[0], 3, 3);
         },
     };
+
+    //std.debug.print("subcode {b}", .{sub_code});
 
     const op = switch (sub_code) {
         0b000 => "add",
@@ -183,17 +185,26 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
     };
 }
 
-fn eac_string(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, alloc: Allocator) ![]const u8 {
+fn eac_string(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, alloc: Allocator, add_prefix: bool) ![]const u8 {
     const eac = effective_address_calculation(r_m, mod, bytes, signed);
     var str: []const u8 = undefined;
-    if (eac.displacement == -1) {
-        str = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-    } else {
+    if (eac.direct_address > -1) {
+        str = try std.fmt.allocPrint(alloc, "[{d}]", .{eac.direct_address});
+    } else if (eac.displacement > -1) {
         str = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
+    } else {
+        str = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
     }
 
-    const prefix = if (wide) "word" else "byte";
-    return try std.fmt.allocPrint(alloc, "{s} {s}", .{ prefix, str });
+    var prefix: []const u8 = undefined;
+
+    if (add_prefix) {
+        prefix = if (wide) "word " else "byte ";
+    } else {
+        prefix = "";
+    }
+
+    return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, str });
 }
 
 fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
@@ -237,7 +248,7 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
 
         bytes_read += imm_bytes.len;
         source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
-        dest = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc);
+        dest = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc, true);
     } else if (mod == 0b10) {
         // memory mode, 16-bit displacement
         if (!signed and wide) {
@@ -249,7 +260,7 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
 
         bytes_read += 2 + imm_bytes.len;
         source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
-        dest = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc);
+        dest = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc, true);
     } else {
         //std.debug.print("mod {b}\n\n", .{mod});
         unreachable;
@@ -369,17 +380,19 @@ fn decode_any_regmem_to_regmem(op: []const u8, bytes: []u8, alloc: Allocator) !I
         }
 
         const reg_name = register_name(reg, wide);
-
-        const eac = effective_address_calculation(r_m, mod, bytes[2..4], signed);
-
         var dest = reg_name;
-        var source: []const u8 = undefined;
 
-        if (eac.displacement == -1) {
-            source = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-        } else {
-            source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
-        }
+        //const eac = effective_address_calculation(r_m, mod, bytes[2..4], signed);
+
+        // var source: []const u8 = undefined;
+
+        // if (eac.displacement == -1) {
+        //     source = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
+        // } else {
+        //     source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
+        // }
+
+        var source: []const u8 = try eac_string(r_m, mod, bytes[2..4], signed, wide, alloc, false);
 
         if (d == 0) {
             var temp = dest;
@@ -436,7 +449,8 @@ fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, signed: bool) Ef
     } else if (r_m == 0b110 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b110 and mod == 0b00) {
-        unreachable;
+        // direct address
+        return EffAddressCalc{ .registers = "none", .direct_address = word_value };
     } else if (r_m == 0b110 and mod == 0b01) {
         return EffAddressCalc{ .registers = "bp", .displacement = byte_value };
     } else if (r_m == 0b111 and mod == 0b10) {
