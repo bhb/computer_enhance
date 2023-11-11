@@ -66,9 +66,9 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
 }
 
 fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
-    const four_bit_inst_code = nth_bits(u8, bytes[0], 4, 4);
-    const six_bit_inst_code = nth_bits(u8, bytes[0], 2, 6);
-    const seven_bit_inst_code = nth_bits(u8, bytes[0], 1, 7);
+    const four_bit_inst_code: u8 = nth_bits(u8, bytes[0], 4, 4);
+    const six_bit_inst_code: u8 = nth_bits(u8, bytes[0], 2, 6);
+    const seven_bit_inst_code: u8 = nth_bits(u8, bytes[0], 1, 7);
 
     const four_bit_instruction = switch (four_bit_inst_code) {
         0b1011 => InstType.mov_imm_to_reg,
@@ -83,9 +83,11 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
     };
 
     const seven_bit_instruction = switch (seven_bit_inst_code) {
-        0b0000010, 0b0010110, 0b001110 => InstType.any_imm_to_acc,
+        0b0000010, 0b0010110, 0b001110, 0b0011110 => InstType.any_imm_to_acc,
         else => null,
     };
+
+    //std.debug.print("{b:0>8}\n", .{bytes[0]});
 
     const instr_type = seven_bit_instruction orelse six_bit_instruction orelse four_bit_instruction orelse InstType.unknown;
 
@@ -218,8 +220,6 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
 
     var bytes_read: usize = 2;
 
-    //std.debug.print("all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
-
     var source: []u8 = undefined;
     var imm_bytes: []u8 = undefined;
 
@@ -239,11 +239,24 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
         dest = reg;
     } else if ((mod == 0b00)) {
         // memory mode, no displacement follows
+        // Except when R/M = 110, then 16-bit displacement follows
+
+        //std.debug.print("w: {}, mod: {b}, r_m: {b}, wide {}, signed {}\n", .{ wide, mod, r_m, wide, signed });
+
+        //std.debug.print("all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
+
+        var imm_byte_index: u8 = 2;
+        if (r_m == 0b110) {
+            // Except when R/M = 110, then 16-bit displacement follows
+            imm_byte_index += 2;
+            bytes_read += 2;
+        }
+
         if (!signed and wide) {
             // define a slice using the [start..end] syntax. slice begins at array[start] and ends just before array[end].
-            imm_bytes = bytes[2..4];
+            imm_bytes = bytes[imm_byte_index .. imm_byte_index + 2];
         } else {
-            imm_bytes = bytes[2..3];
+            imm_bytes = bytes[imm_byte_index .. imm_byte_index + 1];
         }
 
         bytes_read += imm_bytes.len;
