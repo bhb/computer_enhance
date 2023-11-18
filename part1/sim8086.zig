@@ -33,6 +33,8 @@ const Inst = struct { name: []const u8, dest: ?[]const u8 = null, source: ?[]con
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
+const MemorySim = struct { ax: u16 = 0, bx: u16 = 0, cx: u16 = 0, dx: u16 = 0, sp: u16 = 0, bp: u16 = 0, si: u16 = 0, di: u16 = 0 };
+
 pub fn main() !void {
     var buffer: [10_000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
@@ -58,10 +60,39 @@ pub fn main() !void {
 
     const instr_length = try decode(filename, alloc, &instructions);
 
-    try printInstructions(&instructions, instr_length);
+    try print_instructions(&instructions, instr_length);
+
+    var memory = MemorySim{};
+
+    if (exec) {
+        simulate_instructions(&instructions, instr_length, &memory);
+        try print_memory(memory);
+    }
 }
 
-fn printInstructions(instructions: *[]Inst, instr_length: u16) !void {
+fn simulate_instructions(instructions: *[]Inst, instr_length: u16, memory: *MemorySim) void {
+    _ = memory;
+    var i: u16 = 0;
+
+    while (i < instr_length) : (i += 1) {
+        var instr = instructions.*[i];
+        _ = instr;
+    }
+}
+
+fn print_memory(memory: MemorySim) !void {
+    try stdout.print("Final registers:\n", .{});
+    try stdout.print("      ax: 0x{x:0>4} ({d})\n", .{ memory.ax, memory.ax });
+    try stdout.print("      bx: 0x{x:0>4} ({d})\n", .{ memory.bx, memory.bx });
+    try stdout.print("      cx: 0x{x:0>4} ({d})\n", .{ memory.cx, memory.cx });
+    try stdout.print("      dx: 0x{x:0>4} ({d})\n", .{ memory.dx, memory.dx });
+    try stdout.print("      sp: 0x{x:0>4} ({d})\n", .{ memory.sp, memory.sp });
+    try stdout.print("      bp: 0x{x:0>4} ({d})\n", .{ memory.bp, memory.bp });
+    try stdout.print("      si: 0x{x:0>4} ({d})\n", .{ memory.si, memory.si });
+    try stdout.print("      di: 0x{x:0>4} ({d})\n", .{ memory.di, memory.di });
+}
+
+fn print_instructions(instructions: *[]Inst, instr_length: u16) !void {
     try stdout.print("bits 16\n\n", .{});
 
     var i: u16 = 0;
