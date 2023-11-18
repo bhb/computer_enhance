@@ -34,7 +34,7 @@ const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem,
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
 pub fn main() !void {
-    var buffer: [2000]u8 = undefined;
+    var buffer: [10_000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
 
@@ -53,10 +53,32 @@ pub fn main() !void {
         unreachable;
     }
 
-    try decode(filename, alloc);
+    var instructions: []Inst = try alloc.alloc(Inst, 100);
+    defer alloc.free(instructions);
+
+    const instr_length = try decode(filename, alloc, &instructions);
+
+    try printInstructions(&instructions, instr_length);
 }
 
-fn decode(filename: []const u8, alloc: Allocator) !void {
+fn printInstructions(instructions: *[]Inst, instr_length: u16) !void {
+    try stdout.print("bits 16\n\n", .{});
+
+    var i: u16 = 0;
+
+    while (i < instr_length) : (i += 1) {
+        var instr = instructions.*[i];
+
+        if (instr.label) |label| {
+            _ = label;
+            try stdout.print("{s} {?s}\n", .{ instr.name, instr.label });
+        } else {
+            try stdout.print("{s} {?s}, {?s}\n", .{ instr.name, instr.dest, instr.source });
+        }
+    }
+}
+
+fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Inst) !u16 {
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
 
@@ -65,19 +87,16 @@ fn decode(filename: []const u8, alloc: Allocator) !void {
     const bytes_read = try file.readAll(&buffer);
 
     var i: usize = 0;
-
-    try stdout.print("bits 16\n\n", .{});
+    var idx: u16 = 0;
 
     while (i < bytes_read) {
         var instr = try decode_instruction(buffer[i..], alloc);
-        if (instr.label) |label| {
-            _ = label;
-            try stdout.print("{s} {?s}\n", .{ instr.name, instr.label });
-        } else {
-            try stdout.print("{s} {?s}, {?s}\n", .{ instr.name, instr.dest, instr.source });
-        }
+        (instructions.*)[idx] = instr;
         i += instr.bytes_read;
+        idx += 1;
     }
+
+    return idx;
 }
 
 fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
