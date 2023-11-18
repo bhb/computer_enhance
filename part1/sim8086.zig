@@ -41,7 +41,17 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
-    const filename = args[1];
+    var filename: []const u8 = undefined;
+    var exec: bool = false;
+
+    if (args.len == 2) {
+        filename = args[1];
+    } else if (args.len == 3 and std.mem.eql(u8, args[1], "--exec")) {
+        exec = true;
+        filename = args[2];
+    } else {
+        unreachable;
+    }
 
     try decode(filename, alloc);
 }
