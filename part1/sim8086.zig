@@ -29,11 +29,74 @@ const Allocator = std.mem.Allocator;
 
 const stdout = std.io.getStdOut().writer();
 
-const Inst = struct { name: []const u8, dest: ?[]const u8 = null, source: ?[]const u8 = null, bytes_read: usize, label: ?[]const u8 = null };
+// HERE: This was great for printing, but it's going to be pretty annoying for simulation
+// I can't switch on strings for dest,
+// I'm going to have to parse integers for the source
+
+const InstrName = enum {
+    mov,
+    add,
+    sub,
+    cmp,
+    jo,
+    jno,
+    jb,
+    jnb,
+    je,
+    jnz,
+    jbe,
+    ja,
+    js,
+    jns,
+    jp,
+    jnp,
+    jl,
+    jnl,
+    jle,
+    jg,
+    loopnz,
+    loopz,
+    loop,
+    jcxz,
+
+    pub fn string(self: InstrName) []const u8 {
+        return @tagName(self);
+    }
+};
+const Instr = struct { name: InstrName, dest: ?[]const u8 = null, source: ?[]const u8 = null, bytes_read: usize, label: ?[]const u8 = null };
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
-const MemorySim = struct { ax: u16 = 0, bx: u16 = 0, cx: u16 = 0, dx: u16 = 0, sp: u16 = 0, bp: u16 = 0, si: u16 = 0, di: u16 = 0 };
+const MemorySim = struct {
+    ax: u16 = 0,
+    bx: u16 = 0,
+    cx: u16 = 0,
+    dx: u16 = 0,
+    sp: u16 = 0,
+    bp: u16 = 0,
+    si: u16 = 0,
+    di: u16 = 0,
+
+    pub fn copy(self: *MemorySim) MemorySim {
+        return MemorySim{ .ax = self.ax, .bx = self.bx, .cx = self.cx, .dx = self.dx, .sp = self.sp, .bp = self.bp, .si = self.si, .di = self.di };
+    }
+
+    pub fn mov(self: *MemorySim, dest: []const u8, source: []const u8) void {
+        _ = source;
+        _ = dest;
+        _ = self;
+        //     const source_val = switch (source) {
+        //         "ax" => self.ax,
+        //         "bx" => self.bx,
+        //         else => unreachable,
+        //     };
+
+        //     switch (dest) {
+        //         "ax" => self.ax = source_val,
+        //         else => unreachable,
+        //     }
+    }
+};
 
 pub fn main() !void {
     var buffer: [10_000]u8 = undefined;
@@ -55,29 +118,37 @@ pub fn main() !void {
         unreachable;
     }
 
-    var instructions: []Inst = try alloc.alloc(Inst, 100);
+    var instructions: []Instr = try alloc.alloc(Instr, 100);
     defer alloc.free(instructions);
 
     const instr_length = try decode(filename, alloc, &instructions);
 
-    try print_instructions(&instructions, instr_length);
-
-    var memory = MemorySim{};
-
     if (exec) {
+        var memory = MemorySim{};
         simulate_instructions(&instructions, instr_length, &memory);
         try print_memory(memory);
+    } else {
+        try print_instructions(&instructions, instr_length);
     }
 }
 
-fn simulate_instructions(instructions: *[]Inst, instr_length: u16, memory: *MemorySim) void {
-    _ = memory;
+fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *MemorySim) void {
     var i: u16 = 0;
 
     while (i < instr_length) : (i += 1) {
         var instr = instructions.*[i];
-        _ = instr;
+        simulate_instruction(instr, memory);
     }
+}
+
+fn simulate_instruction(inst: Instr, memory: *MemorySim) void {
+    _ = memory;
+    _ = inst;
+    // switch (inst.name) {
+    //     "mov" => {
+    //         memory.mov(inst.dest, inst.source);
+    //     },
+    // }
 }
 
 fn print_memory(memory: MemorySim) !void {
@@ -92,7 +163,7 @@ fn print_memory(memory: MemorySim) !void {
     try stdout.print("      di: 0x{x:0>4} ({d})\n", .{ memory.di, memory.di });
 }
 
-fn print_instructions(instructions: *[]Inst, instr_length: u16) !void {
+fn print_instructions(instructions: *[]Instr, instr_length: u16) !void {
     try stdout.print("bits 16\n\n", .{});
 
     var i: u16 = 0;
@@ -102,14 +173,14 @@ fn print_instructions(instructions: *[]Inst, instr_length: u16) !void {
 
         if (instr.label) |label| {
             _ = label;
-            try stdout.print("{s} {?s}\n", .{ instr.name, instr.label });
+            try stdout.print("{s} {?s}\n", .{ instr.name.string(), instr.label });
         } else {
-            try stdout.print("{s} {?s}, {?s}\n", .{ instr.name, instr.dest, instr.source });
+            try stdout.print("{s} {?s}, {?s}\n", .{ instr.name.string(), instr.dest, instr.source });
         }
     }
 }
 
-fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Inst) !u16 {
+fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Instr) !u16 {
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
 
@@ -130,7 +201,7 @@ fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Inst) !u16 {
     return idx;
 }
 
-fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
+fn decode_instruction(bytes: []u8, alloc: Allocator) !Instr {
     const four_bit_inst_code: u8 = nth_bits(u8, bytes[0], 4, 4);
     const six_bit_inst_code: u8 = nth_bits(u8, bytes[0], 2, 6);
     const seven_bit_inst_code: u8 = nth_bits(u8, bytes[0], 1, 7);
@@ -162,18 +233,12 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
 
     const instr_type = eight_bit_instruction orelse seven_bit_instruction orelse six_bit_instruction orelse four_bit_instruction orelse InstType.unknown;
 
-    const op_name = switch (instr_type) {
-        InstType.any_regmem_to_regmem => subcode_op_name(six_bit_inst_code, bytes),
-        InstType.any_imm_to_acc => subcode_op_name(six_bit_inst_code, bytes),
-        InstType.any_imm_to_regmem => subcode_op_name(six_bit_inst_code, bytes),
-        else => "n/a",
-    };
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
-        InstType.mov_regmem_to_regmem => try decode_any_regmem_to_regmem("mov", bytes, alloc),
-        InstType.any_regmem_to_regmem => try decode_any_regmem_to_regmem(op_name, bytes, alloc),
-        InstType.any_imm_to_acc => try decode_any_imm_to_acc(op_name, bytes, alloc),
-        InstType.any_imm_to_regmem => try decode_any_imm_to_memreg(op_name, bytes, alloc),
+        InstType.mov_regmem_to_regmem => try decode_any_regmem_to_regmem(InstrName.mov, bytes, alloc),
+        InstType.any_regmem_to_regmem => try decode_any_regmem_to_regmem(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
+        InstType.any_imm_to_acc => try decode_any_imm_to_acc(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
+        InstType.any_imm_to_regmem => try decode_any_imm_to_memreg(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
         InstType.any_jump => try any_jump(eight_bit_inst_code, bytes, alloc),
         else => unreachable,
     };
@@ -181,39 +246,48 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Inst {
     return inst;
 }
 
-fn any_jump(eight_bit_instruction: u8, bytes: []u8, alloc: Allocator) !Inst {
+fn op_name(instr_type: InstType, six_bit_inst_code: u8, bytes: []u8) InstrName {
+    return switch (instr_type) {
+        InstType.any_regmem_to_regmem => subcode_op_name(six_bit_inst_code, bytes),
+        InstType.any_imm_to_acc => subcode_op_name(six_bit_inst_code, bytes),
+        InstType.any_imm_to_regmem => subcode_op_name(six_bit_inst_code, bytes),
+        else => unreachable,
+    };
+}
+
+fn any_jump(eight_bit_instruction: u8, bytes: []u8, alloc: Allocator) !Instr {
     //std.debug.print("{b:0>8} {b:0>8} {b:0>8} \n", .{ bytes[0], bytes[1], bytes[2] });
 
     const label: []const u8 = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(bytes[1..2], true)});
 
     const name = switch (eight_bit_instruction) {
-        0b0111_0000 => "jo",
-        0b0111_0001 => "jno",
-        0b0111_0010 => "jb",
-        0b0111_0011 => "jnb",
-        0b0111_0100 => "je",
-        0b0111_0101 => "jnz",
-        0b0111_0110 => "jbe",
-        0b0111_0111 => "ja",
-        0b0111_1000 => "js",
-        0b0111_1001 => "jns",
-        0b0111_1010 => "jp",
-        0b0111_1011 => "jnp",
-        0b0111_1100 => "jl",
-        0b0111_1101 => "jnl",
-        0b0111_1110 => "jle",
-        0b0111_1111 => "jg",
-        0b1110_0000 => "loopnz",
-        0b1110_0001 => "loopz",
-        0b1110_0010 => "loop",
-        0b1110_0011 => "jcxz",
+        0b0111_0000 => InstrName.jo,
+        0b0111_0001 => InstrName.jno,
+        0b0111_0010 => InstrName.jb,
+        0b0111_0011 => InstrName.jnb,
+        0b0111_0100 => InstrName.je,
+        0b0111_0101 => InstrName.jnz,
+        0b0111_0110 => InstrName.jbe,
+        0b0111_0111 => InstrName.ja,
+        0b0111_1000 => InstrName.js,
+        0b0111_1001 => InstrName.jns,
+        0b0111_1010 => InstrName.jp,
+        0b0111_1011 => InstrName.jnp,
+        0b0111_1100 => InstrName.jl,
+        0b0111_1101 => InstrName.jnl,
+        0b0111_1110 => InstrName.jle,
+        0b0111_1111 => InstrName.jg,
+        0b1110_0000 => InstrName.loopnz,
+        0b1110_0001 => InstrName.loopz,
+        0b1110_0010 => InstrName.loop,
+        0b1110_0011 => InstrName.jcxz,
         else => unreachable,
     };
 
-    return Inst{ .name = name, .label = label, .bytes_read = 2 };
+    return Instr{ .name = name, .label = label, .bytes_read = 2 };
 }
 
-fn decode_any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+fn decode_any_imm_to_acc(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
     //std.debug.print("...all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
 
     const wide = (bytes[0] & 0b00000001) == 1;
@@ -231,7 +305,7 @@ fn decode_any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
         bytes_read = 2;
     }
 
-    return Inst{
+    return Instr{
         .name = op,
         .dest = reg,
         .source = try std.fmt.allocPrint(alloc, "{d}", .{value}),
@@ -239,7 +313,7 @@ fn decode_any_imm_to_acc(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
     };
 }
 
-fn subcode_op_name(instr: u8, bytes: []u8) []const u8 {
+fn subcode_op_name(instr: u8, bytes: []u8) InstrName {
     const sub_code = switch (instr) {
         0b100000 => blk: {
             break :blk nth_bits(u8, bytes[1], 3, 3);
@@ -252,18 +326,16 @@ fn subcode_op_name(instr: u8, bytes: []u8) []const u8 {
     //std.debug.print("subcode {b}", .{sub_code});
 
     const op = switch (sub_code) {
-        0b000 => "add",
-        0b101 => "sub",
-        0b111 => "cmp",
+        0b000 => InstrName.add,
+        0b101 => InstrName.sub,
+        0b111 => InstrName.cmp,
         else => unreachable,
     };
 
     return op;
 }
 
-fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
-    const op = "mov";
-
+fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Instr {
     const wide = ((bytes[0] & 0b00001000) >> 3) == 1;
     const reg_code = (bytes[0] & 0b00000111);
 
@@ -283,8 +355,8 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Inst {
 
     const signed = false;
 
-    return Inst{
-        .name = op,
+    return Instr{
+        .name = InstrName.mov,
         .dest = reg,
         .source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)}),
         .bytes_read = bytes_read,
@@ -313,7 +385,7 @@ fn eac_string(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, alloc: Al
     return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, str });
 }
 
-fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
     const wide = nth_bits(u8, bytes[0], 0, 1) == 1;
     const signed = nth_bits(u8, bytes[0], 1, 1) == 1;
     const mod = (bytes[1] & 0b11000000) >> 6;
@@ -383,7 +455,7 @@ fn decode_any_imm_to_memreg(op: []const u8, bytes: []u8, alloc: Allocator) !Inst
         unreachable;
     }
 
-    return Inst{
+    return Instr{
         .name = op,
         .dest = dest,
         .source = source,
@@ -457,7 +529,7 @@ fn decode_value(bytes: []u8, signed: bool) i32 {
 }
 
 // rm = register or memory
-fn decode_any_regmem_to_regmem(op: []const u8, bytes: []u8, alloc: Allocator) !Inst {
+fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
     const signed = false;
 
     // 2 bits are "DW" (one bit each)
@@ -482,7 +554,7 @@ fn decode_any_regmem_to_regmem(op: []const u8, bytes: []u8, alloc: Allocator) !I
             reg2 = temp;
         }
 
-        return Inst{ .name = op, .dest = reg1, .source = reg2, .bytes_read = 2 };
+        return Instr{ .name = op, .dest = reg1, .source = reg2, .bytes_read = 2 };
     } else {
         var bytes_read: u4 = 2;
 
@@ -517,7 +589,7 @@ fn decode_any_regmem_to_regmem(op: []const u8, bytes: []u8, alloc: Allocator) !I
             source = temp;
         }
 
-        return Inst{ .name = op, .dest = dest, .source = source, .bytes_read = bytes_read };
+        return Instr{ .name = op, .dest = dest, .source = source, .bytes_read = bytes_read };
     }
 }
 
