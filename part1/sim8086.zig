@@ -1,16 +1,3 @@
-// Homework 1
-// Once you’ve successfully disassembled the binaries from both listings thirty-seven and thirty-eight, you’re done!
-
-// Homework 2
-// Files: 0039
-// Tables on page 162
-// Immediate to register is page 164
-
-// Homework 3
-// Files: 0041
-// Page 165, 166 for add, sub, cmp
-// Page 168 for jmp
-
 // Usage:
 // zig run sim8086.zig -- <binary file>
 
@@ -26,6 +13,7 @@
 const std = @import("std");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
+const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const stdout = std.io.getStdOut().writer();
 
@@ -82,15 +70,17 @@ const RegisterName = enum {
         return @tagName(self);
     }
 };
-const OperandTag = enum { register, location, value };
+
 const Location = struct {
     reg1: ?RegisterName,
     reg2: ?RegisterName,
     offset: ?u16,
 };
+
+const OperandTag = enum { register, location, value };
 const Operand = union(OperandTag) {
     register: RegisterName,
-    value: u16,
+    value: i32,
     location: []const u8,
 
     pub fn string(self: Operand, alloc: Allocator) ![]const u8 {
@@ -101,7 +91,7 @@ const Operand = union(OperandTag) {
         };
     }
 };
-const Instr = struct { name: InstrName, dest: ?Operand = null, source: ?[]const u8 = null, bytes_read: usize, label: ?[]const u8 = null };
+const Instr = struct { name: InstrName, dest: ?Operand = null, source: ?Operand = null, bytes_read: u4, jmp_offset: ?i32 = null };
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
@@ -137,9 +127,11 @@ const MemorySim = struct {
 };
 
 pub fn main() !void {
-    var buffer: [10_000]u8 = undefined;
+    var buffer: [20_000]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
+
+    std.debug.print("allocator: {d} \n", .{fba.end_index});
 
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
@@ -156,10 +148,24 @@ pub fn main() !void {
         unreachable;
     }
 
+    std.debug.print("allocator: {d} \n", .{fba.end_index});
+
     var instructions: []Instr = try alloc.alloc(Instr, 100);
+
+    std.debug.print("size of InstrName {}\n", .{@sizeOf(InstrName)});
+    std.debug.print("size of RegisterName {}\n", .{@sizeOf(RegisterName)});
+    std.debug.print("size of Operand {}\n", .{@sizeOf(Operand)});
+    std.debug.print("size of usize {}\n", .{@sizeOf(usize)});
+    std.debug.print("size of i32 {}\n", .{@sizeOf(i32)});
+    std.debug.print("size of []const u8 {}\n", .{@sizeOf([]const u8)});
+    std.debug.print("size of OperandTag {}\n", .{@sizeOf(OperandTag)});
+    std.debug.print("size of Instr {}\n", .{@sizeOf(Instr)});
+
     defer alloc.free(instructions);
 
-    const instr_length = try decode(filename, alloc, &instructions);
+    std.debug.print("allocator: {d} \n", .{fba.end_index});
+
+    const instr_length = try decode(filename, alloc, fba, &instructions);
 
     if (exec) {
         var memory = MemorySim{};
@@ -209,18 +215,23 @@ fn print_instructions(instructions: *[]Instr, instr_length: u16, alloc: Allocato
     while (i < instr_length) : (i += 1) {
         var instr = instructions.*[i];
 
-        if (instr.label) |label| {
-            _ = label;
-            try stdout.print("{s} {?s}\n", .{ instr.name.string(), instr.label });
+        if (instr.jmp_offset) |label| {
+            try stdout.print("{s} {?d}\n", .{ instr.name.string(), label });
         } else if (instr.dest) |dest| {
-            try stdout.print("{s} {s}, {?s}\n", .{ instr.name.string(), try dest.string(alloc), instr.source });
+            if (instr.source) |source| {
+                try stdout.print("{s} {s}, {s}\n", .{ instr.name.string(), try dest.string(alloc), try source.string(alloc) });
+            } else {
+                unreachable;
+            }
         } else {
             unreachable;
         }
     }
 }
 
-fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Instr) !u16 {
+fn decode(filename: []const u8, alloc: Allocator, fba: FixedBufferAllocator, instructions: *[]Instr) !u16 {
+    std.debug.print("allocator: {d} \n", .{fba.end_index});
+
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
 
@@ -232,6 +243,8 @@ fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Instr) !u16 {
     var idx: u16 = 0;
 
     while (i < bytes_read) {
+        std.debug.print("progress: {d} of {d}\n", .{ i, bytes_read });
+        std.debug.print("allocator: {d} \n", .{fba.end_index});
         var instr = try decode_instruction(buffer[i..], alloc);
         (instructions.*)[idx] = instr;
         i += instr.bytes_read;
@@ -274,12 +287,12 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Instr {
     const instr_type = eight_bit_instruction orelse seven_bit_instruction orelse six_bit_instruction orelse four_bit_instruction orelse InstType.unknown;
 
     const inst = switch (instr_type) {
-        InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes, alloc),
+        InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes),
         InstType.mov_regmem_to_regmem => try decode_any_regmem_to_regmem(InstrName.mov, bytes, alloc),
         InstType.any_regmem_to_regmem => try decode_any_regmem_to_regmem(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
-        InstType.any_imm_to_acc => try decode_any_imm_to_acc(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
+        InstType.any_imm_to_acc => try decode_any_imm_to_acc(op_name(instr_type, six_bit_inst_code, bytes), bytes),
         InstType.any_imm_to_regmem => try decode_any_imm_to_memreg(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
-        InstType.any_jump => try any_jump(eight_bit_inst_code, bytes, alloc),
+        InstType.any_jump => try any_jump(eight_bit_inst_code, bytes),
         else => unreachable,
     };
 
@@ -295,10 +308,10 @@ fn op_name(instr_type: InstType, six_bit_inst_code: u8, bytes: []u8) InstrName {
     };
 }
 
-fn any_jump(eight_bit_instruction: u8, bytes: []u8, alloc: Allocator) !Instr {
+fn any_jump(eight_bit_instruction: u8, bytes: []u8) !Instr {
     //std.debug.print("{b:0>8} {b:0>8} {b:0>8} \n", .{ bytes[0], bytes[1], bytes[2] });
 
-    const label: []const u8 = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(bytes[1..2], true)});
+    const jmp_offset = decode_value(bytes[1..2], true);
 
     const name = switch (eight_bit_instruction) {
         0b0111_0000 => InstrName.jo,
@@ -324,16 +337,16 @@ fn any_jump(eight_bit_instruction: u8, bytes: []u8, alloc: Allocator) !Instr {
         else => unreachable,
     };
 
-    return Instr{ .name = name, .label = label, .bytes_read = 2 };
+    return Instr{ .name = name, .jmp_offset = jmp_offset, .bytes_read = 2 };
 }
 
-fn decode_any_imm_to_acc(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
+fn decode_any_imm_to_acc(op: InstrName, bytes: []u8) !Instr {
     //std.debug.print("...all 6 bytes {b} {b} {b} {b} {b} {b}\n\n", .{ bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] });
 
     const wide = (bytes[0] & 0b00000001) == 1;
     var reg: RegisterName = undefined;
     var value: i32 = undefined;
-    var bytes_read: usize = undefined;
+    var bytes_read: u4 = undefined;
 
     if (wide) {
         reg = RegisterName.ax;
@@ -348,7 +361,7 @@ fn decode_any_imm_to_acc(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
     return Instr{
         .name = op,
         .dest = Operand{ .register = reg },
-        .source = try std.fmt.allocPrint(alloc, "{d}", .{value}),
+        .source = Operand{ .value = value },
         .bytes_read = bytes_read,
     };
 }
@@ -375,7 +388,7 @@ fn subcode_op_name(instr: u8, bytes: []u8) InstrName {
     return op;
 }
 
-fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Instr {
+fn decode_mov_imm_to_reg(bytes: []u8) !Instr {
     const wide = ((bytes[0] & 0b00001000) >> 3) == 1;
     const reg_code = (bytes[0] & 0b00000111);
 
@@ -398,7 +411,7 @@ fn decode_mov_imm_to_reg(bytes: []u8, alloc: Allocator) !Instr {
     return Instr{
         .name = InstrName.mov,
         .dest = Operand{ .register = reg },
-        .source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)}),
+        .source = Operand{ .value = decode_value(imm_bytes, signed) },
         .bytes_read = bytes_read,
     };
 }
@@ -434,9 +447,9 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
 
     //std.debug.print("w: {}, mod: {b}, r_m: {b}, wide {}, signed {}\n", .{ wide, mod, r_m, wide, signed });
 
-    var bytes_read: usize = 2;
+    var bytes_read: u4 = 2;
 
-    var source: []u8 = undefined;
+    var source: i32 = undefined;
     var imm_bytes: []u8 = undefined;
 
     if (mod == 0b11) {
@@ -450,8 +463,9 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
             imm_bytes = bytes[2..3];
         }
 
-        bytes_read += imm_bytes.len;
-        source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+        // I know that the imm_bytes.length is 0 or 1
+        bytes_read += @intCast(imm_bytes.len);
+        source = decode_value(imm_bytes, signed);
         dest = Operand{ .register = reg };
     } else if ((mod == 0b00)) {
         // memory mode, no displacement follows
@@ -475,8 +489,9 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
             imm_bytes = bytes[imm_byte_index .. imm_byte_index + 1];
         }
 
-        bytes_read += imm_bytes.len;
-        source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+        // I know that the imm_bytes.length is 0 or 1
+        bytes_read += @intCast(imm_bytes.len);
+        source = decode_value(imm_bytes, signed);
         dest = Operand{ .location = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc, true) };
     } else if (mod == 0b10) {
         // memory mode, 16-bit displacement
@@ -487,8 +502,9 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
             imm_bytes = bytes[4..5];
         }
 
-        bytes_read += 2 + imm_bytes.len;
-        source = try std.fmt.allocPrint(alloc, "{d}", .{decode_value(imm_bytes, signed)});
+        // I know that the imm_bytes.length is 0 or 1
+        bytes_read += @intCast(2 + imm_bytes.len);
+        source = decode_value(imm_bytes, signed);
         dest = Operand{ .location = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc, true) };
     } else {
         //std.debug.print("mod {b}\n\n", .{mod});
@@ -498,7 +514,7 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
     return Instr{
         .name = op,
         .dest = dest,
-        .source = source,
+        .source = Operand{ .value = source },
         .bytes_read = bytes_read,
     };
 }
@@ -586,7 +602,7 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
 
     if (mod == 0b11) {
         var reg1 = register_name(reg, wide);
-        var reg2 = register_name2(r_m, wide);
+        var reg2 = register_name(r_m, wide);
 
         // TODO - restore
         // if (d == 0) {
@@ -596,10 +612,10 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
         // }
         if (d == 0) {
             reg1 = register_name(r_m, wide);
-            reg2 = register_name2(reg, wide);
+            reg2 = register_name(reg, wide);
         }
 
-        return Instr{ .name = op, .dest = Operand{ .register = reg1 }, .source = reg2, .bytes_read = 2 };
+        return Instr{ .name = op, .dest = Operand{ .register = reg1 }, .source = Operand{ .register = reg2 }, .bytes_read = 2 };
     } else {
         var bytes_read: u4 = 2;
 
@@ -625,7 +641,7 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
         //     source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
         // }
 
-        var source: []const u8 = try eac_string(r_m, mod, bytes[2..4], signed, wide, alloc, false);
+        var source: Operand = Operand{ .location = try eac_string(r_m, mod, bytes[2..4], signed, wide, alloc, false) };
 
         // TODO restore
         // if (d == 0) {
@@ -637,8 +653,8 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
         if (d == 0) {
             var temp = dest;
             _ = temp;
-            dest = Operand{ .location = source };
-            source = register_name2(reg, wide);
+            dest = source;
+            source = Operand{ .register = register_name(reg, wide) };
         }
 
         return Instr{ .name = op, .dest = dest, .source = source, .bytes_read = bytes_read };
@@ -718,21 +734,6 @@ fn register_name(reg_code: u8, wide: bool) RegisterName {
         0b101 => (if (!wide) RegisterName.ch else RegisterName.bp),
         0b110 => (if (!wide) RegisterName.dh else RegisterName.si),
         0b111 => (if (!wide) RegisterName.bh else RegisterName.di),
-        else => unreachable,
-    };
-}
-
-// TODO - delete
-fn register_name2(reg_code: u8, wide: bool) []const u8 {
-    return switch (reg_code) {
-        0b000 => (if (!wide) "al" else "ax"),
-        0b001 => (if (!wide) "cl" else "cx"),
-        0b010 => (if (!wide) "dl" else "dx"),
-        0b011 => (if (!wide) "bl" else "bx"),
-        0b100 => (if (!wide) "ah" else "sp"),
-        0b101 => (if (!wide) "ch" else "bp"),
-        0b110 => (if (!wide) "dh" else "si"),
-        0b111 => (if (!wide) "bh" else "di"),
         else => unreachable,
     };
 }
