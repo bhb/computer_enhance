@@ -80,7 +80,7 @@ const Location = struct {
 const OperandTag = enum { register, location, value };
 const Operand = union(OperandTag) {
     register: RegisterName,
-    value: i32,
+    value: u16,
     location: []const u8,
 
     pub fn string(self: Operand, alloc: Allocator) ![]const u8 {
@@ -105,24 +105,43 @@ const MemorySim = struct {
     si: u16 = 0,
     di: u16 = 0,
 
+    pub fn read(self: *MemorySim, register: RegisterName) u16 {
+        return switch (register) {
+            RegisterName.ax => self.ax,
+            RegisterName.bx => self.bx,
+            RegisterName.cx => self.cx,
+            RegisterName.dx => self.dx,
+            RegisterName.sp => self.sp,
+            RegisterName.bp => self.bp,
+            RegisterName.si => self.si,
+            RegisterName.di => self.di,
+            else => unreachable,
+        };
+    }
+
     pub fn copy(self: *MemorySim) MemorySim {
         return MemorySim{ .ax = self.ax, .bx = self.bx, .cx = self.cx, .dx = self.dx, .sp = self.sp, .bp = self.bp, .si = self.si, .di = self.di };
     }
 
-    pub fn mov(self: *MemorySim, dest: []const u8, source: []const u8) void {
-        _ = source;
-        _ = dest;
-        _ = self;
-        //     const source_val = switch (source) {
-        //         "ax" => self.ax,
-        //         "bx" => self.bx,
-        //         else => unreachable,
-        //     };
-
-        //     switch (dest) {
-        //         "ax" => self.ax = source_val,
-        //         else => unreachable,
-        //     }
+    pub fn mov(self: *MemorySim, dest: Operand, source: Operand) void {
+        switch (dest) {
+            Operand.register => {
+                switch (dest.register) {
+                    RegisterName.ax => self.ax = source.value,
+                    RegisterName.bx => self.bx = source.value,
+                    RegisterName.cx => self.cx = source.value,
+                    RegisterName.dx => self.dx = source.value,
+                    RegisterName.sp => self.sp = source.value,
+                    RegisterName.bp => self.bp = source.value,
+                    RegisterName.si => self.si = source.value,
+                    RegisterName.di => self.di = source.value,
+                    else => unreachable,
+                }
+            },
+            else => {
+                unreachable;
+            },
+        }
     }
 };
 
@@ -131,7 +150,7 @@ pub fn main() !void {
     var fba = std.heap.FixedBufferAllocator.init(&buffer);
     const alloc = fba.allocator();
 
-    std.debug.print("allocator: {d} \n", .{fba.end_index});
+    //std.debug.print("allocator: {d} \n", .{fba.end_index});
 
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
@@ -148,63 +167,84 @@ pub fn main() !void {
         unreachable;
     }
 
-    std.debug.print("allocator: {d} \n", .{fba.end_index});
+    //std.debug.print("allocator: {d} \n", .{fba.end_index});
 
     var instructions: []Instr = try alloc.alloc(Instr, 100);
 
-    std.debug.print("size of InstrName {}\n", .{@sizeOf(InstrName)});
-    std.debug.print("size of RegisterName {}\n", .{@sizeOf(RegisterName)});
-    std.debug.print("size of Operand {}\n", .{@sizeOf(Operand)});
-    std.debug.print("size of usize {}\n", .{@sizeOf(usize)});
-    std.debug.print("size of i32 {}\n", .{@sizeOf(i32)});
-    std.debug.print("size of []const u8 {}\n", .{@sizeOf([]const u8)});
-    std.debug.print("size of OperandTag {}\n", .{@sizeOf(OperandTag)});
-    std.debug.print("size of Instr {}\n", .{@sizeOf(Instr)});
+    // std.debug.print("size of InstrName {}\n", .{@sizeOf(InstrName)});
+    // std.debug.print("size of RegisterName {}\n", .{@sizeOf(RegisterName)});
+    // std.debug.print("size of Operand {}\n", .{@sizeOf(Operand)});
+    // std.debug.print("size of usize {}\n", .{@sizeOf(usize)});
+    // std.debug.print("size of i32 {}\n", .{@sizeOf(i32)});
+    // std.debug.print("size of []const u8 {}\n", .{@sizeOf([]const u8)});
+    // std.debug.print("size of OperandTag {}\n", .{@sizeOf(OperandTag)});
+    // std.debug.print("size of Instr {}\n", .{@sizeOf(Instr)});
 
     defer alloc.free(instructions);
 
-    std.debug.print("allocator: {d} \n", .{fba.end_index});
+    //std.debug.print("allocator: {d} \n", .{fba.end_index});
 
     const instr_length = try decode(filename, alloc, fba, &instructions);
 
     if (exec) {
         var memory = MemorySim{};
-        simulate_instructions(&instructions, instr_length, &memory);
+        try simulate_instructions(&instructions, instr_length, &memory, alloc);
         try print_memory(memory);
     } else {
         try print_instructions(&instructions, instr_length, alloc);
     }
 }
 
-fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *MemorySim) void {
+fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *MemorySim, alloc: Allocator) !void {
     var i: u16 = 0;
 
     while (i < instr_length) : (i += 1) {
         var instr = instructions.*[i];
-        simulate_instruction(instr, memory);
+        try print_instruction(instr, alloc);
+        try simulate_instruction(instr, memory);
+        try stdout.print("\r\n", .{}); // stupid windows
     }
 }
 
-fn simulate_instruction(inst: Instr, memory: *MemorySim) void {
-    _ = memory;
-    _ = inst;
-    // switch (inst.name) {
-    //     "mov" => {
-    //         memory.mov(inst.dest, inst.source);
-    //     },
-    // }
+fn simulate_instruction(inst: Instr, memory: *MemorySim) !void {
+    switch (inst.name) {
+        InstrName.mov => {
+            const register = inst.dest.?.register;
+            const old_value = memory.read(register);
+            memory.mov(inst.dest.?, inst.source.?);
+            const new_value = memory.read(register);
+            try stdout.print(" ; {s}:0x{x}->0x{x} ", .{ register.string(), old_value, new_value });
+        },
+        else => {
+            unreachable;
+        },
+    }
 }
 
 fn print_memory(memory: MemorySim) !void {
-    try stdout.print("Final registers:\n", .{});
-    try stdout.print("      ax: 0x{x:0>4} ({d})\n", .{ memory.ax, memory.ax });
-    try stdout.print("      bx: 0x{x:0>4} ({d})\n", .{ memory.bx, memory.bx });
-    try stdout.print("      cx: 0x{x:0>4} ({d})\n", .{ memory.cx, memory.cx });
-    try stdout.print("      dx: 0x{x:0>4} ({d})\n", .{ memory.dx, memory.dx });
-    try stdout.print("      sp: 0x{x:0>4} ({d})\n", .{ memory.sp, memory.sp });
-    try stdout.print("      bp: 0x{x:0>4} ({d})\n", .{ memory.bp, memory.bp });
-    try stdout.print("      si: 0x{x:0>4} ({d})\n", .{ memory.si, memory.si });
-    try stdout.print("      di: 0x{x:0>4} ({d})\n", .{ memory.di, memory.di });
+    try stdout.print("Final registers:\r\n", .{});
+    try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ memory.ax, memory.ax });
+    try stdout.print("      bx: 0x{x:0>4} ({d})\r\n", .{ memory.bx, memory.bx });
+    try stdout.print("      cx: 0x{x:0>4} ({d})\r\n", .{ memory.cx, memory.cx });
+    try stdout.print("      dx: 0x{x:0>4} ({d})\r\n", .{ memory.dx, memory.dx });
+    try stdout.print("      sp: 0x{x:0>4} ({d})\r\n", .{ memory.sp, memory.sp });
+    try stdout.print("      bp: 0x{x:0>4} ({d})\r\n", .{ memory.bp, memory.bp });
+    try stdout.print("      si: 0x{x:0>4} ({d})\r\n", .{ memory.si, memory.si });
+    try stdout.print("      di: 0x{x:0>4} ({d})\r\n", .{ memory.di, memory.di });
+}
+
+fn print_instruction(instr: Instr, alloc: Allocator) !void {
+    if (instr.jmp_offset) |label| {
+        try stdout.print("{s} {?d}", .{ instr.name.string(), label });
+    } else if (instr.dest) |dest| {
+        if (instr.source) |source| {
+            try stdout.print("{s} {s}, {s}", .{ instr.name.string(), try dest.string(alloc), try source.string(alloc) });
+        } else {
+            unreachable;
+        }
+    } else {
+        unreachable;
+    }
 }
 
 fn print_instructions(instructions: *[]Instr, instr_length: u16, alloc: Allocator) !void {
@@ -214,23 +254,14 @@ fn print_instructions(instructions: *[]Instr, instr_length: u16, alloc: Allocato
 
     while (i < instr_length) : (i += 1) {
         var instr = instructions.*[i];
-
-        if (instr.jmp_offset) |label| {
-            try stdout.print("{s} {?d}\n", .{ instr.name.string(), label });
-        } else if (instr.dest) |dest| {
-            if (instr.source) |source| {
-                try stdout.print("{s} {s}, {s}\n", .{ instr.name.string(), try dest.string(alloc), try source.string(alloc) });
-            } else {
-                unreachable;
-            }
-        } else {
-            unreachable;
-        }
+        try print_instruction(instr, alloc);
+        try stdout.print("\n", .{});
     }
 }
 
 fn decode(filename: []const u8, alloc: Allocator, fba: FixedBufferAllocator, instructions: *[]Instr) !u16 {
-    std.debug.print("allocator: {d} \n", .{fba.end_index});
+    //std.debug.print("allocator: {d} \n", .{fba.end_index});
+    _ = fba;
 
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
@@ -243,8 +274,8 @@ fn decode(filename: []const u8, alloc: Allocator, fba: FixedBufferAllocator, ins
     var idx: u16 = 0;
 
     while (i < bytes_read) {
-        std.debug.print("progress: {d} of {d}\n", .{ i, bytes_read });
-        std.debug.print("allocator: {d} \n", .{fba.end_index});
+        //std.debug.print("progress: {d} of {d}\n", .{ i, bytes_read });
+        //std.debug.print("allocator: {d} \n", .{fba.end_index});
         var instr = try decode_instruction(buffer[i..], alloc);
         (instructions.*)[idx] = instr;
         i += instr.bytes_read;
@@ -361,7 +392,7 @@ fn decode_any_imm_to_acc(op: InstrName, bytes: []u8) !Instr {
     return Instr{
         .name = op,
         .dest = Operand{ .register = reg },
-        .source = Operand{ .value = value },
+        .source = Operand{ .value = @intCast(value) },
         .bytes_read = bytes_read,
     };
 }
@@ -411,7 +442,7 @@ fn decode_mov_imm_to_reg(bytes: []u8) !Instr {
     return Instr{
         .name = InstrName.mov,
         .dest = Operand{ .register = reg },
-        .source = Operand{ .value = decode_value(imm_bytes, signed) },
+        .source = Operand{ .value = @intCast(decode_value(imm_bytes, signed)) },
         .bytes_read = bytes_read,
     };
 }
@@ -514,7 +545,7 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
     return Instr{
         .name = op,
         .dest = dest,
-        .source = Operand{ .value = source },
+        .source = Operand{ .value = @intCast(source) },
         .bytes_read = bytes_read,
     };
 }
