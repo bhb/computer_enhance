@@ -119,6 +119,20 @@ const MemorySim = struct {
         };
     }
 
+    pub fn write(self: *MemorySim, register: RegisterName, value: u16) void {
+        switch (register) {
+            RegisterName.ax => self.ax = value,
+            RegisterName.bx => self.bx = value,
+            RegisterName.cx => self.cx = value,
+            RegisterName.dx => self.dx = value,
+            RegisterName.sp => self.sp = value,
+            RegisterName.bp => self.bp = value,
+            RegisterName.si => self.si = value,
+            RegisterName.di => self.di = value,
+            else => unreachable,
+        }
+    }
+
     pub fn copy(self: *MemorySim) MemorySim {
         return MemorySim{ .ax = self.ax, .bx = self.bx, .cx = self.cx, .dx = self.dx, .sp = self.sp, .bp = self.bp, .si = self.si, .di = self.di };
     }
@@ -126,17 +140,12 @@ const MemorySim = struct {
     pub fn mov(self: *MemorySim, dest: Operand, source: Operand) void {
         switch (dest) {
             Operand.register => {
-                switch (dest.register) {
-                    RegisterName.ax => self.ax = source.value,
-                    RegisterName.bx => self.bx = source.value,
-                    RegisterName.cx => self.cx = source.value,
-                    RegisterName.dx => self.dx = source.value,
-                    RegisterName.sp => self.sp = source.value,
-                    RegisterName.bp => self.bp = source.value,
-                    RegisterName.si => self.si = source.value,
-                    RegisterName.di => self.di = source.value,
+                const value = switch (source) {
+                    Operand.register => self.read(source.register),
+                    Operand.value => source.value,
                     else => unreachable,
-                }
+                };
+                self.write(dest.register, value);
             },
             else => {
                 unreachable;
