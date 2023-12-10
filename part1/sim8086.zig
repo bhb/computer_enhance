@@ -152,6 +152,38 @@ const MemorySim = struct {
             },
         }
     }
+
+    pub fn add(self: *MemorySim, dest: Operand, source: Operand) void {
+        switch (dest) {
+            Operand.register => {
+                const value = switch (source) {
+                    Operand.register => self.read(source.register),
+                    Operand.value => source.value,
+                    else => unreachable,
+                };
+                self.write(dest.register, self.read(dest.register) +% value);
+            },
+            else => {
+                unreachable;
+            },
+        }
+    }
+
+    pub fn sub(self: *MemorySim, dest: Operand, source: Operand) void {
+        switch (dest) {
+            Operand.register => {
+                const value = switch (source) {
+                    Operand.register => self.read(source.register),
+                    Operand.value => source.value,
+                    else => unreachable,
+                };
+                self.write(dest.register, self.read(dest.register) -% value);
+            },
+            else => {
+                unreachable;
+            },
+        }
+    }
 };
 
 pub fn main() !void {
@@ -216,30 +248,61 @@ fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *Mem
 }
 
 fn simulate_instruction(inst: Instr, memory: *MemorySim) !void {
+    const register = inst.dest.?.register;
+    const old_value = memory.read(register);
     switch (inst.name) {
         InstrName.mov => {
-            const register = inst.dest.?.register;
-            const old_value = memory.read(register);
             memory.mov(inst.dest.?, inst.source.?);
-            const new_value = memory.read(register);
-            try stdout.print(" ; {s}:0x{x}->0x{x} ", .{ register.string(), old_value, new_value });
         },
+        InstrName.sub => {
+            memory.sub(inst.dest.?, inst.source.?);
+        },
+        InstrName.add => {
+            memory.add(inst.dest.?, inst.source.?);
+        },
+        InstrName.cmp => {},
         else => {
             unreachable;
         },
     }
+    const new_value = memory.read(register);
+    try stdout.print(" ; {s}:0x{x:0>4}->0x{x:0>4} ", .{ register.string(), old_value, new_value });
+}
+
+test "wraparound addition and subtraction" {
+    const x: u16 = 998;
+    const y: u16 = x -% 999;
+    try std.testing.expectEqual(y, 65535);
+
+    try std.testing.expectEqual(y, 65535);
 }
 
 fn print_memory(memory: MemorySim) !void {
     try stdout.print("Final registers:\r\n", .{});
-    try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ memory.ax, memory.ax });
-    try stdout.print("      bx: 0x{x:0>4} ({d})\r\n", .{ memory.bx, memory.bx });
-    try stdout.print("      cx: 0x{x:0>4} ({d})\r\n", .{ memory.cx, memory.cx });
-    try stdout.print("      dx: 0x{x:0>4} ({d})\r\n", .{ memory.dx, memory.dx });
-    try stdout.print("      sp: 0x{x:0>4} ({d})\r\n", .{ memory.sp, memory.sp });
-    try stdout.print("      bp: 0x{x:0>4} ({d})\r\n", .{ memory.bp, memory.bp });
-    try stdout.print("      si: 0x{x:0>4} ({d})\r\n", .{ memory.si, memory.si });
-    try stdout.print("      di: 0x{x:0>4} ({d})\r\n", .{ memory.di, memory.di });
+    if (memory.ax != 0) {
+        try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ memory.ax, memory.ax });
+    }
+    if (memory.bx != 0) {
+        try stdout.print("      bx: 0x{x:0>4} ({d})\r\n", .{ memory.bx, memory.bx });
+    }
+    if (memory.cx != 0) {
+        try stdout.print("      cx: 0x{x:0>4} ({d})\r\n", .{ memory.cx, memory.cx });
+    }
+    if (memory.dx != 0) {
+        try stdout.print("      dx: 0x{x:0>4} ({d})\r\n", .{ memory.dx, memory.dx });
+    }
+    if (memory.sp != 0) {
+        try stdout.print("      sp: 0x{x:0>4} ({d})\r\n", .{ memory.sp, memory.sp });
+    }
+    if (memory.bp != 0) {
+        try stdout.print("      bp: 0x{x:0>4} ({d})\r\n", .{ memory.bp, memory.bp });
+    }
+    if (memory.si != 0) {
+        try stdout.print("      si: 0x{x:0>4} ({d})\r\n", .{ memory.si, memory.si });
+    }
+    if (memory.di != 0) {
+        try stdout.print("      di: 0x{x:0>4} ({d})\r\n", .{ memory.di, memory.di });
+    }
 }
 
 fn print_instruction(instr: Instr, alloc: Allocator) !void {
