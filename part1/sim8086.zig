@@ -95,7 +95,7 @@ const Instr = struct { name: InstrName, dest: ?Operand = null, source: ?Operand 
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
-const MemorySim = struct {
+const Processor = struct {
     ax: u16 = 0,
     bx: u16 = 0,
     cx: u16 = 0,
@@ -104,8 +104,31 @@ const MemorySim = struct {
     bp: u16 = 0,
     si: u16 = 0,
     di: u16 = 0,
+    zero: bool = false,
+    signed: bool = false,
+    parity: bool = false,
 
-    pub fn read(self: *MemorySim, register: RegisterName) u16 {
+    pub fn flags(self: *Processor) []const u8 {
+        const signed_int: u4 = @intFromBool(self.signed);
+        const signed_parity: u2 = @intFromBool(self.parity);
+        const signed_zero: u1 = @intFromBool(self.parity);
+
+        const flagsValue = signed_int << 2 | signed_parity << 1 | signed_zero;
+
+        return switch (flagsValue) {
+            0b000 => "",
+            0b001 => "Z",
+            0b010 => "P",
+            0b011 => "PZ",
+            0b100 => "S",
+            0b101 => "SZ",
+            0b110 => "SP",
+            0b111 => "SPZ",
+            else => unreachable,
+        };
+    }
+
+    pub fn read(self: *Processor, register: RegisterName) u16 {
         return switch (register) {
             RegisterName.ax => self.ax,
             RegisterName.bx => self.bx,
@@ -119,7 +142,7 @@ const MemorySim = struct {
         };
     }
 
-    pub fn write(self: *MemorySim, register: RegisterName, value: u16) void {
+    pub fn write(self: *Processor, register: RegisterName, value: u16) void {
         switch (register) {
             RegisterName.ax => self.ax = value,
             RegisterName.bx => self.bx = value,
@@ -133,11 +156,11 @@ const MemorySim = struct {
         }
     }
 
-    pub fn copy(self: *MemorySim) MemorySim {
-        return MemorySim{ .ax = self.ax, .bx = self.bx, .cx = self.cx, .dx = self.dx, .sp = self.sp, .bp = self.bp, .si = self.si, .di = self.di };
+    pub fn copy(self: *Processor) Processor {
+        return Processor{ .ax = self.ax, .bx = self.bx, .cx = self.cx, .dx = self.dx, .sp = self.sp, .bp = self.bp, .si = self.si, .di = self.di };
     }
 
-    pub fn mov(self: *MemorySim, dest: Operand, source: Operand) void {
+    pub fn mov(self: *Processor, dest: Operand, source: Operand) void {
         switch (dest) {
             Operand.register => {
                 const value = switch (source) {
@@ -153,7 +176,7 @@ const MemorySim = struct {
         }
     }
 
-    pub fn add(self: *MemorySim, dest: Operand, source: Operand) void {
+    pub fn add(self: *Processor, dest: Operand, source: Operand) void {
         switch (dest) {
             Operand.register => {
                 const value = switch (source) {
@@ -169,7 +192,7 @@ const MemorySim = struct {
         }
     }
 
-    pub fn sub(self: *MemorySim, dest: Operand, source: Operand) void {
+    pub fn sub(self: *Processor, dest: Operand, source: Operand) void {
         switch (dest) {
             Operand.register => {
                 const value = switch (source) {
@@ -228,7 +251,7 @@ pub fn main() !void {
     const instr_length = try decode(filename, alloc, fba, &instructions);
 
     if (exec) {
-        var memory = MemorySim{};
+        var memory = Processor{};
         try simulate_instructions(&instructions, instr_length, &memory, alloc);
         try print_memory(memory);
     } else {
@@ -236,7 +259,7 @@ pub fn main() !void {
     }
 }
 
-fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *MemorySim, alloc: Allocator) !void {
+fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *Processor, alloc: Allocator) !void {
     var i: u16 = 0;
 
     while (i < instr_length) : (i += 1) {
@@ -247,9 +270,10 @@ fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *Mem
     }
 }
 
-fn simulate_instruction(inst: Instr, memory: *MemorySim) !void {
+fn simulate_instruction(inst: Instr, memory: *Processor) !void {
     const register = inst.dest.?.register;
     const old_value = memory.read(register);
+    const old_flags = memory.flags();
     switch (inst.name) {
         InstrName.mov => {
             memory.mov(inst.dest.?, inst.source.?);
@@ -266,18 +290,14 @@ fn simulate_instruction(inst: Instr, memory: *MemorySim) !void {
         },
     }
     const new_value = memory.read(register);
+    const new_flags = memory.flags();
     try stdout.print(" ; {s}:0x{x:0>4}->0x{x:0>4} ", .{ register.string(), old_value, new_value });
+    if (!std.mem.eql(u8, old_flags, new_flags)) {
+        try stdout.print(" flags:{s}->{s} ", .{ old_flags, new_flags });
+    }
 }
 
-test "wraparound addition and subtraction" {
-    const x: u16 = 998;
-    const y: u16 = x -% 999;
-    try std.testing.expectEqual(y, 65535);
-
-    try std.testing.expectEqual(y, 65535);
-}
-
-fn print_memory(memory: MemorySim) !void {
+fn print_memory(memory: Processor) !void {
     try stdout.print("Final registers:\r\n", .{});
     if (memory.ax != 0) {
         try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ memory.ax, memory.ax });
