@@ -108,10 +108,15 @@ const Processor = struct {
     signed: bool = false,
     parity: bool = false,
 
+    pub fn update_flags(self: *Processor, value: u16) void {
+        self.zero = (value == 0);
+        self.signed = (nth_bits(u16, value, 15, 1) == 1);
+    }
+
     pub fn flags(self: *Processor) []const u8 {
         const signed_int: u4 = @intFromBool(self.signed);
         const signed_parity: u2 = @intFromBool(self.parity);
-        const signed_zero: u1 = @intFromBool(self.parity);
+        const signed_zero: u1 = @intFromBool(self.zero);
 
         const flagsValue = signed_int << 2 | signed_parity << 1 | signed_zero;
 
@@ -128,84 +133,49 @@ const Processor = struct {
         };
     }
 
-    pub fn read(self: *Processor, register: RegisterName) u16 {
-        return switch (register) {
-            RegisterName.ax => self.ax,
-            RegisterName.bx => self.bx,
-            RegisterName.cx => self.cx,
-            RegisterName.dx => self.dx,
-            RegisterName.sp => self.sp,
-            RegisterName.bp => self.bp,
-            RegisterName.si => self.si,
-            RegisterName.di => self.di,
+    pub fn read(self: *Processor, operand: Operand) u16 {
+        switch (operand) {
+            Operand.register => |register| {
+                return switch (register) {
+                    RegisterName.ax => self.ax,
+                    RegisterName.bx => self.bx,
+                    RegisterName.cx => self.cx,
+                    RegisterName.dx => self.dx,
+                    RegisterName.sp => self.sp,
+                    RegisterName.bp => self.bp,
+                    RegisterName.si => self.si,
+                    RegisterName.di => self.di,
+                    else => unreachable,
+                };
+            },
+            Operand.value => |value| {
+                return value;
+            },
             else => unreachable,
-        };
+        }
     }
 
-    pub fn write(self: *Processor, register: RegisterName, value: u16) void {
-        switch (register) {
-            RegisterName.ax => self.ax = value,
-            RegisterName.bx => self.bx = value,
-            RegisterName.cx => self.cx = value,
-            RegisterName.dx => self.dx = value,
-            RegisterName.sp => self.sp = value,
-            RegisterName.bp => self.bp = value,
-            RegisterName.si => self.si = value,
-            RegisterName.di => self.di = value,
+    pub fn write(self: *Processor, operand: Operand, value: u16) void {
+        switch (operand) {
+            Operand.register => |register| {
+                switch (register) {
+                    RegisterName.ax => self.ax = value,
+                    RegisterName.bx => self.bx = value,
+                    RegisterName.cx => self.cx = value,
+                    RegisterName.dx => self.dx = value,
+                    RegisterName.sp => self.sp = value,
+                    RegisterName.bp => self.bp = value,
+                    RegisterName.si => self.si = value,
+                    RegisterName.di => self.di = value,
+                    else => unreachable,
+                }
+            },
             else => unreachable,
         }
     }
 
     pub fn copy(self: *Processor) Processor {
         return Processor{ .ax = self.ax, .bx = self.bx, .cx = self.cx, .dx = self.dx, .sp = self.sp, .bp = self.bp, .si = self.si, .di = self.di };
-    }
-
-    pub fn mov(self: *Processor, dest: Operand, source: Operand) void {
-        switch (dest) {
-            Operand.register => {
-                const value = switch (source) {
-                    Operand.register => self.read(source.register),
-                    Operand.value => source.value,
-                    else => unreachable,
-                };
-                self.write(dest.register, value);
-            },
-            else => {
-                unreachable;
-            },
-        }
-    }
-
-    pub fn add(self: *Processor, dest: Operand, source: Operand) void {
-        switch (dest) {
-            Operand.register => {
-                const value = switch (source) {
-                    Operand.register => self.read(source.register),
-                    Operand.value => source.value,
-                    else => unreachable,
-                };
-                self.write(dest.register, self.read(dest.register) +% value);
-            },
-            else => {
-                unreachable;
-            },
-        }
-    }
-
-    pub fn sub(self: *Processor, dest: Operand, source: Operand) void {
-        switch (dest) {
-            Operand.register => {
-                const value = switch (source) {
-                    Operand.register => self.read(source.register),
-                    Operand.value => source.value,
-                    else => unreachable,
-                };
-                self.write(dest.register, self.read(dest.register) -% value);
-            },
-            else => {
-                unreachable;
-            },
-        }
     }
 };
 
@@ -251,78 +221,93 @@ pub fn main() !void {
     const instr_length = try decode(filename, alloc, fba, &instructions);
 
     if (exec) {
-        var memory = Processor{};
-        try simulate_instructions(&instructions, instr_length, &memory, alloc);
-        try print_memory(memory);
+        var proc = Processor{};
+        try simulate_instructions(&instructions, instr_length, &proc, alloc);
+        try print_proc(&proc);
     } else {
         try print_instructions(&instructions, instr_length, alloc);
     }
 }
 
-fn simulate_instructions(instructions: *[]Instr, instr_length: u16, memory: *Processor, alloc: Allocator) !void {
+fn simulate_instructions(instructions: *[]Instr, instr_length: u16, proc: *Processor, alloc: Allocator) !void {
     var i: u16 = 0;
 
     while (i < instr_length) : (i += 1) {
         var instr = instructions.*[i];
         try print_instruction(instr, alloc);
-        try simulate_instruction(instr, memory);
+        try simulate_instruction(instr, proc);
         try stdout.print("\r\n", .{}); // stupid windows
     }
 }
 
-fn simulate_instruction(inst: Instr, memory: *Processor) !void {
-    const register = inst.dest.?.register;
-    const old_value = memory.read(register);
-    const old_flags = memory.flags();
+fn simulate_instruction(inst: Instr, proc: *Processor) !void {
+    const old_value = proc.read(inst.dest.?);
+    const old_flags = proc.flags();
     switch (inst.name) {
         InstrName.mov => {
-            memory.mov(inst.dest.?, inst.source.?);
+            proc.write(inst.dest.?, proc.read(inst.source.?));
         },
         InstrName.sub => {
-            memory.sub(inst.dest.?, inst.source.?);
+            const value = proc.read(inst.dest.?) - proc.read(inst.source.?);
+            proc.write(inst.dest.?, value);
+            proc.update_flags(value);
         },
         InstrName.add => {
-            memory.add(inst.dest.?, inst.source.?);
+            const value = proc.read(inst.dest.?) + proc.read(inst.source.?);
+            proc.write(inst.dest.?, value);
+            proc.update_flags(value);
         },
-        InstrName.cmp => {},
+        InstrName.cmp => {
+            const value = proc.read(inst.dest.?) - proc.read(inst.source.?);
+            proc.update_flags(value);
+        },
         else => {
             unreachable;
         },
     }
-    const new_value = memory.read(register);
-    const new_flags = memory.flags();
-    try stdout.print(" ; {s}:0x{x:0>4}->0x{x:0>4} ", .{ register.string(), old_value, new_value });
+
+    const new_value = proc.read(inst.dest.?);
+    const new_flags = proc.flags();
+
+    if (inst.name != InstrName.cmp) {
+        try stdout.print(" ; {s}:0x{x}->0x{x}", .{ inst.dest.?.register.string(), old_value, new_value });
+    } else {
+        try stdout.print(" ;", .{});
+    }
     if (!std.mem.eql(u8, old_flags, new_flags)) {
         try stdout.print(" flags:{s}->{s} ", .{ old_flags, new_flags });
+    } else {
+        try stdout.print(" ", .{});
     }
 }
 
-fn print_memory(memory: Processor) !void {
+fn print_proc(proc: *Processor) !void {
     try stdout.print("Final registers:\r\n", .{});
-    if (memory.ax != 0) {
-        try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ memory.ax, memory.ax });
+    if (proc.ax != 0) {
+        try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ proc.ax, proc.ax });
     }
-    if (memory.bx != 0) {
-        try stdout.print("      bx: 0x{x:0>4} ({d})\r\n", .{ memory.bx, memory.bx });
+    if (proc.bx != 0) {
+        try stdout.print("      bx: 0x{x:0>4} ({d})\r\n", .{ proc.bx, proc.bx });
     }
-    if (memory.cx != 0) {
-        try stdout.print("      cx: 0x{x:0>4} ({d})\r\n", .{ memory.cx, memory.cx });
+    if (proc.cx != 0) {
+        try stdout.print("      cx: 0x{x:0>4} ({d})\r\n", .{ proc.cx, proc.cx });
     }
-    if (memory.dx != 0) {
-        try stdout.print("      dx: 0x{x:0>4} ({d})\r\n", .{ memory.dx, memory.dx });
+    if (proc.dx != 0) {
+        try stdout.print("      dx: 0x{x:0>4} ({d})\r\n", .{ proc.dx, proc.dx });
     }
-    if (memory.sp != 0) {
-        try stdout.print("      sp: 0x{x:0>4} ({d})\r\n", .{ memory.sp, memory.sp });
+    if (proc.sp != 0) {
+        try stdout.print("      sp: 0x{x:0>4} ({d})\r\n", .{ proc.sp, proc.sp });
     }
-    if (memory.bp != 0) {
-        try stdout.print("      bp: 0x{x:0>4} ({d})\r\n", .{ memory.bp, memory.bp });
+    if (proc.bp != 0) {
+        try stdout.print("      bp: 0x{x:0>4} ({d})\r\n", .{ proc.bp, proc.bp });
     }
-    if (memory.si != 0) {
-        try stdout.print("      si: 0x{x:0>4} ({d})\r\n", .{ memory.si, memory.si });
+    if (proc.si != 0) {
+        try stdout.print("      si: 0x{x:0>4} ({d})\r\n", .{ proc.si, proc.si });
     }
-    if (memory.di != 0) {
-        try stdout.print("      di: 0x{x:0>4} ({d})\r\n", .{ memory.di, memory.di });
+    if (proc.di != 0) {
+        try stdout.print("      di: 0x{x:0>4} ({d})\r\n", .{ proc.di, proc.di });
     }
+    try stdout.print("   flags: {s}\r\n\r\n", .{proc.flags()});
 }
 
 fn print_instruction(instr: Instr, alloc: Allocator) !void {
@@ -643,7 +628,7 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
 }
 
 // get the bit at the kth position (from the right)
-// for n biths
+// for n bits
 fn nth_bits(comptime T: type, value: T, comptime k: u4, comptime n: u4) T {
     var i: u4 = 1;
     var bitmask: T = 1;
@@ -727,12 +712,6 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
         var reg1 = register_name(reg, wide);
         var reg2 = register_name(r_m, wide);
 
-        // TODO - restore
-        // if (d == 0) {
-        //     var temp = reg1;
-        //     reg1 = reg2;
-        //     reg2 = temp;
-        // }
         if (d == 0) {
             reg1 = register_name(r_m, wide);
             reg2 = register_name(reg, wide);
@@ -766,16 +745,7 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
 
         var source: Operand = Operand{ .location = try eac_string(r_m, mod, bytes[2..4], signed, wide, alloc, false) };
 
-        // TODO restore
-        // if (d == 0) {
-        //     var temp = dest;
-        //     dest = source;
-        //     source = temp;
-        // }
-
         if (d == 0) {
-            var temp = dest;
-            _ = temp;
             dest = source;
             source = Operand{ .register = register_name(reg, wide) };
         }
