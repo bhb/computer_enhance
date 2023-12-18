@@ -65,7 +65,7 @@ const RegisterName = enum {
     dx,
     si,
     sp,
-
+    ip,
     pub fn string(self: RegisterName) []const u8 {
         return @tagName(self);
     }
@@ -104,6 +104,7 @@ const Processor = struct {
     bp: u16 = 0,
     si: u16 = 0,
     di: u16 = 0,
+    ip: u16 = 0,
     zero: bool = false,
     signed: bool = false,
     parity: bool = false,
@@ -167,6 +168,7 @@ const Processor = struct {
                     RegisterName.bp => self.bp = value,
                     RegisterName.si => self.si = value,
                     RegisterName.di => self.di = value,
+                    RegisterName.ip => self.ip = value,
                     else => unreachable,
                 }
             },
@@ -243,22 +245,26 @@ fn simulate_instructions(instructions: *[]Instr, instr_length: u16, proc: *Proce
 fn simulate_instruction(inst: Instr, proc: *Processor) !void {
     const old_value = proc.read(inst.dest.?);
     const old_flags = proc.flags();
+    const old_ip = proc.ip;
+
+    proc.write(Operand{ .register = RegisterName.ip }, old_ip + inst.bytes_read);
+
     switch (inst.name) {
         InstrName.mov => {
             proc.write(inst.dest.?, proc.read(inst.source.?));
         },
         InstrName.sub => {
-            const value = proc.read(inst.dest.?) - proc.read(inst.source.?);
+            const value = proc.read(inst.dest.?) -% proc.read(inst.source.?);
             proc.write(inst.dest.?, value);
             proc.update_flags(value);
         },
         InstrName.add => {
-            const value = proc.read(inst.dest.?) + proc.read(inst.source.?);
+            const value = proc.read(inst.dest.?) +% proc.read(inst.source.?);
             proc.write(inst.dest.?, value);
             proc.update_flags(value);
         },
         InstrName.cmp => {
-            const value = proc.read(inst.dest.?) - proc.read(inst.source.?);
+            const value = proc.read(inst.dest.?) -% proc.read(inst.source.?);
             proc.update_flags(value);
         },
         else => {
@@ -268,9 +274,10 @@ fn simulate_instruction(inst: Instr, proc: *Processor) !void {
 
     const new_value = proc.read(inst.dest.?);
     const new_flags = proc.flags();
+    const new_ip = proc.ip;
 
     if (inst.name != InstrName.cmp) {
-        try stdout.print(" ; {s}:0x{x}->0x{x}", .{ inst.dest.?.register.string(), old_value, new_value });
+        try stdout.print(" ; {s}:0x{x}->0x{x} ip:0x{x}->0x{x}", .{ inst.dest.?.register.string(), old_value, new_value, old_ip, new_ip });
     } else {
         try stdout.print(" ;", .{});
     }
@@ -283,30 +290,24 @@ fn simulate_instruction(inst: Instr, proc: *Processor) !void {
 
 fn print_proc(proc: *Processor) !void {
     try stdout.print("Final registers:\r\n", .{});
-    if (proc.ax != 0) {
-        try stdout.print("      ax: 0x{x:0>4} ({d})\r\n", .{ proc.ax, proc.ax });
+
+    const registers = [_]struct { name: []const u8, value: u16 }{
+        .{ .name = "ax", .value = proc.ax },
+        .{ .name = "bx", .value = proc.bx },
+        .{ .name = "cx", .value = proc.cx },
+        .{ .name = "sp", .value = proc.sp },
+        .{ .name = "bp", .value = proc.bp },
+        .{ .name = "si", .value = proc.si },
+        .{ .name = "di", .value = proc.di },
+        .{ .name = "ip", .value = proc.ip },
+    };
+
+    for (registers) |reg| {
+        if (reg.value != 0) {
+            try stdout.print("      {s}: 0x{x:0>4} ({d})\r\n", .{ reg.name, reg.value, reg.value });
+        }
     }
-    if (proc.bx != 0) {
-        try stdout.print("      bx: 0x{x:0>4} ({d})\r\n", .{ proc.bx, proc.bx });
-    }
-    if (proc.cx != 0) {
-        try stdout.print("      cx: 0x{x:0>4} ({d})\r\n", .{ proc.cx, proc.cx });
-    }
-    if (proc.dx != 0) {
-        try stdout.print("      dx: 0x{x:0>4} ({d})\r\n", .{ proc.dx, proc.dx });
-    }
-    if (proc.sp != 0) {
-        try stdout.print("      sp: 0x{x:0>4} ({d})\r\n", .{ proc.sp, proc.sp });
-    }
-    if (proc.bp != 0) {
-        try stdout.print("      bp: 0x{x:0>4} ({d})\r\n", .{ proc.bp, proc.bp });
-    }
-    if (proc.si != 0) {
-        try stdout.print("      si: 0x{x:0>4} ({d})\r\n", .{ proc.si, proc.si });
-    }
-    if (proc.di != 0) {
-        try stdout.print("      di: 0x{x:0>4} ({d})\r\n", .{ proc.di, proc.di });
-    }
+
     try stdout.print("   flags: {s}\r\n\r\n", .{proc.flags()});
 }
 
