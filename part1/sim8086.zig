@@ -27,7 +27,7 @@ const InstrName = enum {
     jb,
     jnb,
     je,
-    jnz,
+    jne,
     jbe,
     ja,
     js,
@@ -91,6 +91,7 @@ const Operand = union(OperandTag) {
         };
     }
 };
+
 const Instr = struct { name: InstrName, dest: ?Operand = null, source: ?Operand = null, bytes_read: u4, jmp_offset: ?i32 = null };
 const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
@@ -168,7 +169,6 @@ const Processor = struct {
                     RegisterName.bp => self.bp = value,
                     RegisterName.si => self.si = value,
                     RegisterName.di => self.di = value,
-                    RegisterName.ip => self.ip = value,
                     else => unreachable,
                 }
             },
@@ -205,7 +205,7 @@ pub fn main() !void {
 
     //std.debug.print("allocator: {d} \n", .{fba.end_index});
 
-    var instructions: []Instr = try alloc.alloc(Instr, 100);
+    //var instructions: []Instr = try alloc.alloc(Instr, 100);
 
     // std.debug.print("size of InstrName {}\n", .{@sizeOf(InstrName)});
     // std.debug.print("size of RegisterName {}\n", .{@sizeOf(RegisterName)});
@@ -216,26 +216,30 @@ pub fn main() !void {
     // std.debug.print("size of OperandTag {}\n", .{@sizeOf(OperandTag)});
     // std.debug.print("size of Instr {}\n", .{@sizeOf(Instr)});
 
-    defer alloc.free(instructions);
+    //defer alloc.free(instructions);
 
     //std.debug.print("allocator: {d} \n", .{fba.end_index});
 
-    const instr_length = try decode(filename, alloc, fba, &instructions);
+    var file = try fs.cwd().openFile(filename, .{});
+    defer file.close();
+    try file.seekTo(0);
+    const bytes_read = try file.readAll(&buffer);
+
+    //const bytes_read = try decode(filename, alloc, &instructions);
 
     if (exec) {
         var proc = Processor{};
-        try simulate_instructions(&instructions, instr_length, &proc, alloc);
+        try simulate_instructions(&buffer, bytes_read, &proc, alloc);
         try print_proc(&proc);
     } else {
-        try print_instructions(&instructions, instr_length, alloc);
+        try print_instructions(&buffer, bytes_read, alloc);
     }
 }
 
-fn simulate_instructions(instructions: *[]Instr, instr_length: u16, proc: *Processor, alloc: Allocator) !void {
-    var i: u16 = 0;
-
-    while (i < instr_length) : (i += 1) {
-        var instr = instructions.*[i];
+fn simulate_instructions(buffer: []u8, bytes_read: usize, proc: *Processor, alloc: Allocator) !void {
+    while (proc.ip < bytes_read) {
+        //std.debug.print("ip: {d}, length: {d}\n", .{ proc.ip, bytes_read });
+        var instr = try decode_instruction(buffer[proc.ip..], alloc);
         try print_instruction(instr, alloc);
         try simulate_instruction(instr, proc);
         try stdout.print("\r\n", .{}); // stupid windows
@@ -243,40 +247,56 @@ fn simulate_instructions(instructions: *[]Instr, instr_length: u16, proc: *Proce
 }
 
 fn simulate_instruction(inst: Instr, proc: *Processor) !void {
-    const old_value = proc.read(inst.dest.?);
+    var old_value: u16 = undefined;
+    var new_value: u16 = undefined;
     const old_flags = proc.flags();
     const old_ip = proc.ip;
 
-    proc.write(Operand{ .register = RegisterName.ip }, old_ip + inst.bytes_read);
+    proc.ip = old_ip + inst.bytes_read;
 
     switch (inst.name) {
         InstrName.mov => {
+            old_value = proc.read(inst.dest.?);
             proc.write(inst.dest.?, proc.read(inst.source.?));
+            new_value = proc.read(inst.dest.?);
         },
         InstrName.sub => {
+            old_value = proc.read(inst.dest.?);
             const value = proc.read(inst.dest.?) -% proc.read(inst.source.?);
             proc.write(inst.dest.?, value);
             proc.update_flags(value);
+            new_value = proc.read(inst.dest.?);
         },
         InstrName.add => {
+            old_value = proc.read(inst.dest.?);
             const value = proc.read(inst.dest.?) +% proc.read(inst.source.?);
             proc.write(inst.dest.?, value);
             proc.update_flags(value);
+            new_value = proc.read(inst.dest.?);
         },
         InstrName.cmp => {
+            old_value = proc.read(inst.dest.?);
             const value = proc.read(inst.dest.?) -% proc.read(inst.source.?);
             proc.update_flags(value);
+            new_value = proc.read(inst.dest.?);
+        },
+        InstrName.jne => {
+            const offset: i32 = inst.jmp_offset.?;
+            if (!proc.zero) {
+                proc.ip = @as(u16, @intCast(proc.ip + offset));
+            }
         },
         else => {
             unreachable;
         },
     }
 
-    const new_value = proc.read(inst.dest.?);
     const new_flags = proc.flags();
     const new_ip = proc.ip;
 
-    if (inst.name != InstrName.cmp) {
+    if (inst.jmp_offset != null) {
+        try stdout.print(" ; ip:0x{x}->0x{x}", .{ old_ip, new_ip });
+    } else if (inst.name != InstrName.cmp) {
         try stdout.print(" ; {s}:0x{x}->0x{x} ip:0x{x}->0x{x}", .{ inst.dest.?.register.string(), old_value, new_value, old_ip, new_ip });
     } else {
         try stdout.print(" ;", .{});
@@ -289,7 +309,7 @@ fn simulate_instruction(inst: Instr, proc: *Processor) !void {
 }
 
 fn print_proc(proc: *Processor) !void {
-    try stdout.print("Final registers:\r\n", .{});
+    try stdout.print("\r\nFinal registers:\r\n", .{});
 
     const registers = [_]struct { name: []const u8, value: u16 }{
         .{ .name = "ax", .value = proc.ax },
@@ -313,7 +333,7 @@ fn print_proc(proc: *Processor) !void {
 
 fn print_instruction(instr: Instr, alloc: Allocator) !void {
     if (instr.jmp_offset) |label| {
-        try stdout.print("{s} {?d}", .{ instr.name.string(), label });
+        try stdout.print("{s} ${d}", .{ instr.name.string(), label + instr.bytes_read });
     } else if (instr.dest) |dest| {
         if (instr.source) |source| {
             try stdout.print("{s} {s}, {s}", .{ instr.name.string(), try dest.string(alloc), try source.string(alloc) });
@@ -325,43 +345,41 @@ fn print_instruction(instr: Instr, alloc: Allocator) !void {
     }
 }
 
-fn print_instructions(instructions: *[]Instr, instr_length: u16, alloc: Allocator) !void {
+fn print_instructions(buffer: []u8, bytes_read: usize, alloc: Allocator) !void {
     try stdout.print("bits 16\n\n", .{});
 
+    var printed: u16 = 0;
     var i: u16 = 0;
 
-    while (i < instr_length) : (i += 1) {
-        var instr = instructions.*[i];
+    while (printed <= bytes_read) {
+        var instr = try decode_instruction(buffer[i..], alloc);
+        i += instr.bytes_read;
         try print_instruction(instr, alloc);
+        printed += instr.bytes_read;
         try stdout.print("\n", .{});
     }
 }
 
-fn decode(filename: []const u8, alloc: Allocator, fba: FixedBufferAllocator, instructions: *[]Instr) !u16 {
-    //std.debug.print("allocator: {d} \n", .{fba.end_index});
-    _ = fba;
+// fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Instr) !usize {
+//     var file = try fs.cwd().openFile(filename, .{});
+//     defer file.close();
 
-    var file = try fs.cwd().openFile(filename, .{});
-    defer file.close();
+//     var buffer: [1000]u8 = undefined;
+//     try file.seekTo(0);
+//     const bytes_read = try file.readAll(&buffer);
 
-    var buffer: [1000]u8 = undefined;
-    try file.seekTo(0);
-    const bytes_read = try file.readAll(&buffer);
+//     var i: usize = 0;
+//     var idx: u16 = 0;
 
-    var i: usize = 0;
-    var idx: u16 = 0;
+//     while (i < bytes_read) {
+//         var instr = try decode_instruction(buffer[i..], alloc);
+//         (instructions.*)[idx] = instr;
+//         i += instr.bytes_read;
+//         idx += 1;
+//     }
 
-    while (i < bytes_read) {
-        //std.debug.print("progress: {d} of {d}\n", .{ i, bytes_read });
-        //std.debug.print("allocator: {d} \n", .{fba.end_index});
-        var instr = try decode_instruction(buffer[i..], alloc);
-        (instructions.*)[idx] = instr;
-        i += instr.bytes_read;
-        idx += 1;
-    }
-
-    return idx;
-}
+//     return bytes_read;
+// }
 
 fn decode_instruction(bytes: []u8, alloc: Allocator) !Instr {
     const four_bit_inst_code: u8 = nth_bits(u8, bytes[0], 4, 4);
@@ -428,7 +446,7 @@ fn any_jump(eight_bit_instruction: u8, bytes: []u8) !Instr {
         0b0111_0010 => InstrName.jb,
         0b0111_0011 => InstrName.jnb,
         0b0111_0100 => InstrName.je,
-        0b0111_0101 => InstrName.jnz,
+        0b0111_0101 => InstrName.jne,
         0b0111_0110 => InstrName.jbe,
         0b0111_0111 => InstrName.ja,
         0b0111_1000 => InstrName.js,
