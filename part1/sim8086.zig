@@ -72,28 +72,73 @@ const RegisterName = enum {
 };
 
 const Location = struct {
-    reg1: ?RegisterName,
-    reg2: ?RegisterName,
-    offset: ?u16,
+    prefix: bool = false,
+    wide: bool = false,
+    reg1: ?RegisterName = null,
+    reg2: ?RegisterName = null,
+    displacement: ?u16 = null,
+
+    pub fn string(self: Location, alloc: Allocator) ![]const u8 {
+        var prefix_str: []const u8 = "";
+        var effective_address_str: []const u8 = "";
+
+        if (self.prefix) {
+            prefix_str = if (self.wide) "word " else "byte ";
+        }
+
+        if (self.reg1) |reg1| {
+            if (self.reg2) |reg2| {
+                effective_address_str = try std.fmt.allocPrint(alloc, "[{s}+{s}]", .{ reg1.string(), reg2.string() });
+            } else if (self.displacement) |displacement| {
+                effective_address_str = try std.fmt.allocPrint(alloc, "[{s}+{d}]", .{ reg1.string(), displacement });
+            } else {
+                effective_address_str = try std.fmt.allocPrint(alloc, "[{s}]", .{reg1.string()});
+            }
+        } else if (self.displacement) |displacement| {
+            effective_address_str = try std.fmt.allocPrint(alloc, "[+{d}]", .{displacement});
+        } else {
+            unreachable;
+        }
+
+        // if () {
+        //     str = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
+        // } else if (self.displacement) |displacement| {
+        //     str = try std.fmt.allocPrint(alloc, "[{d}]", .{displacement});
+        // } else {
+        //     str = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
+        // }
+
+        // var prefix: []const u8 = undefined;
+
+        // if (add_prefix) {
+        //     prefix = if (wide) "word " else "byte ";
+        // } else {
+        //     prefix = "";
+        // }
+
+        return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix_str, effective_address_str });
+
+        // return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, str });
+    }
 };
 
 const OperandTag = enum { register, location, value };
 const Operand = union(OperandTag) {
     register: RegisterName,
     value: u16,
-    location: []const u8,
+    location: Location,
 
     pub fn string(self: Operand, alloc: Allocator) ![]const u8 {
         return switch (self) {
             Operand.register => self.register.string(),
-            Operand.location => self.location,
+            Operand.location => self.location.string(alloc),
             Operand.value => try std.fmt.allocPrint(alloc, "{d}", .{self.value}),
         };
     }
 };
 
 const Instr = struct { name: InstrName, dest: ?Operand = null, source: ?Operand = null, bytes_read: u4, jmp_offset: ?i32 = null };
-const InstType = enum { mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
+const InstType = enum { mov_imm_to_regmem, mov_regmem_to_regmem, mov_imm_to_reg, any_imm_to_regmem, any_regmem_to_regmem, add_sub_cmp_imm, any_imm_to_acc, any_jump, unknown };
 const EffAddressCalc = struct { registers: []const u8, displacement: i32 = -1, direct_address: i32 = -1 };
 
 const Processor = struct {
@@ -109,6 +154,7 @@ const Processor = struct {
     zero: bool = false,
     signed: bool = false,
     parity: bool = false,
+    memory: []u8,
 
     pub fn update_flags(self: *Processor, value: u16) void {
         self.zero = (value == 0);
@@ -153,7 +199,10 @@ const Processor = struct {
             Operand.value => |value| {
                 return value;
             },
-            else => unreachable,
+            Operand.location => |loc| {
+                _ = loc;
+                unreachable;
+            },
         }
     }
 
@@ -228,7 +277,8 @@ pub fn main() !void {
     //const bytes_read = try decode(filename, alloc, &instructions);
 
     if (exec) {
-        var proc = Processor{};
+        var memory = [_]u8{0} ** 65536;
+        var proc = Processor{ .memory = &memory };
         try simulate_instructions(&buffer, bytes_read, &proc, alloc);
         try print_proc(&proc);
     } else {
@@ -238,8 +288,7 @@ pub fn main() !void {
 
 fn simulate_instructions(buffer: []u8, bytes_read: usize, proc: *Processor, alloc: Allocator) !void {
     while (proc.ip < bytes_read) {
-        //std.debug.print("ip: {d}, length: {d}\n", .{ proc.ip, bytes_read });
-        var instr = try decode_instruction(buffer[proc.ip..], alloc);
+        var instr = try decode_instruction(buffer[proc.ip..]);
         try print_instruction(instr, alloc);
         try simulate_instruction(instr, proc);
         try stdout.print("\r\n", .{}); // stupid windows
@@ -348,40 +397,19 @@ fn print_instruction(instr: Instr, alloc: Allocator) !void {
 fn print_instructions(buffer: []u8, bytes_read: usize, alloc: Allocator) !void {
     try stdout.print("bits 16\n\n", .{});
 
-    var printed: u16 = 0;
     var i: u16 = 0;
 
-    while (printed <= bytes_read) {
-        var instr = try decode_instruction(buffer[i..], alloc);
+    while (i < bytes_read) {
+        var instr = try decode_instruction(
+            buffer[i..],
+        );
         i += instr.bytes_read;
         try print_instruction(instr, alloc);
-        printed += instr.bytes_read;
         try stdout.print("\n", .{});
     }
 }
 
-// fn decode(filename: []const u8, alloc: Allocator, instructions: *[]Instr) !usize {
-//     var file = try fs.cwd().openFile(filename, .{});
-//     defer file.close();
-
-//     var buffer: [1000]u8 = undefined;
-//     try file.seekTo(0);
-//     const bytes_read = try file.readAll(&buffer);
-
-//     var i: usize = 0;
-//     var idx: u16 = 0;
-
-//     while (i < bytes_read) {
-//         var instr = try decode_instruction(buffer[i..], alloc);
-//         (instructions.*)[idx] = instr;
-//         i += instr.bytes_read;
-//         idx += 1;
-//     }
-
-//     return bytes_read;
-// }
-
-fn decode_instruction(bytes: []u8, alloc: Allocator) !Instr {
+fn decode_instruction(bytes: []u8) !Instr {
     const four_bit_inst_code: u8 = nth_bits(u8, bytes[0], 4, 4);
     const six_bit_inst_code: u8 = nth_bits(u8, bytes[0], 2, 6);
     const seven_bit_inst_code: u8 = nth_bits(u8, bytes[0], 1, 7);
@@ -401,6 +429,7 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Instr {
 
     const seven_bit_instruction = switch (seven_bit_inst_code) {
         0b0000010, 0b0010110, 0b001110, 0b0011110 => InstType.any_imm_to_acc,
+        0b1100011 => InstType.mov_imm_to_regmem,
         else => null,
     };
 
@@ -415,10 +444,11 @@ fn decode_instruction(bytes: []u8, alloc: Allocator) !Instr {
 
     const inst = switch (instr_type) {
         InstType.mov_imm_to_reg => try decode_mov_imm_to_reg(bytes),
-        InstType.mov_regmem_to_regmem => try decode_any_regmem_to_regmem(InstrName.mov, bytes, alloc),
-        InstType.any_regmem_to_regmem => try decode_any_regmem_to_regmem(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
+        InstType.mov_regmem_to_regmem => try decode_any_regmem_to_regmem(InstrName.mov, bytes),
+        InstType.any_regmem_to_regmem => try decode_any_regmem_to_regmem(op_name(instr_type, six_bit_inst_code, bytes), bytes),
         InstType.any_imm_to_acc => try decode_any_imm_to_acc(op_name(instr_type, six_bit_inst_code, bytes), bytes),
-        InstType.any_imm_to_regmem => try decode_any_imm_to_memreg(op_name(instr_type, six_bit_inst_code, bytes), bytes, alloc),
+        InstType.any_imm_to_regmem => try decode_any_imm_to_memreg(op_name(instr_type, six_bit_inst_code, bytes), bytes),
+        InstType.mov_imm_to_regmem => try decode_any_imm_to_memreg(InstrName.mov, bytes),
         InstType.any_jump => try any_jump(eight_bit_inst_code, bytes),
         else => unreachable,
     };
@@ -543,36 +573,48 @@ fn decode_mov_imm_to_reg(bytes: []u8) !Instr {
     };
 }
 
-fn eac_string(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, alloc: Allocator, add_prefix: bool) ![]const u8 {
-    const eac = effective_address_calculation(r_m, mod, bytes, signed);
-    var str: []const u8 = undefined;
-    if (eac.direct_address > -1) {
-        str = try std.fmt.allocPrint(alloc, "[{d}]", .{eac.direct_address});
-    } else if (eac.displacement > -1) {
-        str = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
-    } else {
-        str = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-    }
+test "decode_any_imm_to_memreg" {
+    // add
+    var bytes = [_]u8{
+        0b100000_11, // signed, wide
+        0b00_000_110, // mod 00, rm = direct address
+        0b11101000, // low bits of 1000
+        0b00000011, // high bits of 1000
+        0b00000001, // value is one (low bits)
+        0b00000000, // rest of value (high bits)
+    };
+    var actual = try decode_instruction(&bytes);
+    var expected = Instr{ .name = InstrName.add, .bytes_read = 5, .dest = Operand{ .location = Location{ .displacement = 1000, .prefix = true } }, .source = Operand{ .value = 1 } };
+    try std.testing.expectEqual(expected.dest.?.location.displacement, actual.dest.?.location.displacement);
+    try std.testing.expectEqual(expected.dest.?.location.prefix, actual.dest.?.location.prefix);
+    try std.testing.expectEqual(expected.name, actual.name);
+    try std.testing.expectEqual(expected.bytes_read, actual.bytes_read);
+    try std.testing.expectEqual(expected.source.?.value, actual.source.?.value);
 
-    var prefix: []const u8 = undefined;
-
-    if (add_prefix) {
-        prefix = if (wide) "word " else "byte ";
-    } else {
-        prefix = "";
-    }
-
-    return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, str });
+    // wide mov
+    bytes = [_]u8{
+        0b1100011_1, // wide
+        0b00_000_110, // mod 00, rm = direct address
+        0b11101000, // low bits of 1000
+        0b00000011, // high bits of 1000
+        0b00000001, // value is one (low bits)
+        0b00000000, // rest of value (high bits)
+    };
+    actual = try decode_instruction(&bytes);
+    expected = Instr{ .name = InstrName.mov, .bytes_read = 6, .dest = Operand{ .location = Location{ .prefix = true, .displacement = 1000 } }, .source = Operand{ .value = 1 } };
+    try std.testing.expectEqual(expected.dest.?.location.displacement, actual.dest.?.location.displacement);
+    try std.testing.expectEqual(expected.dest.?.location.prefix, actual.dest.?.location.prefix);
+    try std.testing.expectEqual(expected.name, actual.name);
+    try std.testing.expectEqual(expected.bytes_read, actual.bytes_read);
+    try std.testing.expectEqual(expected.source.?.value, actual.source.?.value);
 }
 
-fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
+fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8) !Instr {
     const wide = nth_bits(u8, bytes[0], 0, 1) == 1;
-    const signed = nth_bits(u8, bytes[0], 1, 1) == 1;
+    const signed = (op != InstrName.mov and nth_bits(u8, bytes[0], 1, 1) == 1);
     const mod = (bytes[1] & 0b11000000) >> 6;
     const r_m = (bytes[1] & 0b00000111);
     var dest: Operand = undefined;
-
-    //std.debug.print("w: {}, mod: {b}, r_m: {b}, wide {}, signed {}\n", .{ wide, mod, r_m, wide, signed });
 
     var bytes_read: u4 = 2;
 
@@ -594,7 +636,7 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
         bytes_read += @intCast(imm_bytes.len);
         source = decode_value(imm_bytes, signed);
         dest = Operand{ .register = reg };
-    } else if ((mod == 0b00)) {
+    } else if (mod == 0b00) {
         // memory mode, no displacement follows
         // Except when R/M = 110, then 16-bit displacement follows
 
@@ -619,7 +661,7 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
         // I know that the imm_bytes.length is 0 or 1
         bytes_read += @intCast(imm_bytes.len);
         source = decode_value(imm_bytes, signed);
-        dest = Operand{ .location = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc, true) };
+        dest = Operand{ .location = location(r_m, mod, bytes[2..], signed, wide, true) };
     } else if (mod == 0b10) {
         // memory mode, 16-bit displacement
         if (!signed and wide) {
@@ -632,9 +674,22 @@ fn decode_any_imm_to_memreg(op: InstrName, bytes: []u8, alloc: Allocator) !Instr
         // I know that the imm_bytes.length is 0 or 1
         bytes_read += @intCast(2 + imm_bytes.len);
         source = decode_value(imm_bytes, signed);
-        dest = Operand{ .location = try eac_string(r_m, mod, bytes[2..], signed, wide, alloc, true) };
+        dest = Operand{ .location = location(r_m, mod, bytes[2..], signed, wide, true) };
+    } else if (mod == 0b01) {
+        // memory mode, 8-bit displacement
+        if (!signed and wide) {
+            // define a slice using the [start..end] syntax. slice begins at array[1] and ends just before array[4].
+            imm_bytes = bytes[3..5];
+        } else {
+            imm_bytes = bytes[3..4];
+        }
+
+        // I know that the imm_bytes.length is 0 or 1
+        bytes_read += @intCast(1 + imm_bytes.len);
+        source = decode_value(imm_bytes, signed);
+        dest = Operand{ .location = location(r_m, mod, bytes[2..], signed, wide, true) };
     } else {
-        //std.debug.print("mod {b}\n\n", .{mod});
+        std.debug.print("unexpected mod {b}\n\n", .{mod});
         unreachable;
     }
 
@@ -711,8 +766,29 @@ fn decode_value(bytes: []u8, signed: bool) i32 {
     // "If the displacement is only a single byte, the 8086 or 8088 automatically sign-extends this quantity to 16-bits before using the information in further address calculation"
 }
 
+test "decode_any_regmem_to_memreg" {
+    var bytes = [_]u8{
+        0b100010_11, // mov, wide and d=1
+        0b00_011_110, // mod=0, reg=bx rm 110
+        0b11101000, // 1000 (lower bits)
+        0b00000011, // 1000 (upper bits, more significant)
+    };
+    var actual = try decode_any_regmem_to_regmem(InstrName.mov, &bytes);
+    var expected = Instr{
+        .name = InstrName.mov,
+        .bytes_read = 4,
+        .dest = Operand{ .register = RegisterName.bx },
+        .source = Operand{ .location = Location{ .displacement = 1000 } },
+    };
+    try std.testing.expectEqual(expected.source.?.location.displacement, actual.source.?.location.displacement);
+    try std.testing.expectEqual(expected.source.?.location.prefix, actual.source.?.location.prefix);
+    try std.testing.expectEqual(expected.name, actual.name);
+    try std.testing.expectEqual(expected.bytes_read, actual.bytes_read);
+    try std.testing.expectEqual(expected.dest.?.register, actual.dest.?.register);
+}
+
 // rm = register or memory
-fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !Instr {
+fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8) !Instr {
     const signed = false;
 
     // 2 bits are "DW" (one bit each)
@@ -728,6 +804,7 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
     const r_m = (bytes[1] & 0b00000111);
 
     if (mod == 0b11) {
+        // register mode, no displacement
         var reg1 = register_name(reg, wide);
         var reg2 = register_name(r_m, wide);
 
@@ -745,7 +822,8 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
         } else if (mod == 0b10) {
             bytes_read += 2;
         } else if (mod == 0b00 and r_m == 0b110) {
-            unreachable;
+            // 16-bit replacement follows
+            bytes_read += 2;
         } else {
             bytes_read += 0;
         }
@@ -762,7 +840,7 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
         //     source = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
         // }
 
-        var source: Operand = Operand{ .location = try eac_string(r_m, mod, bytes[2..4], signed, wide, alloc, false) };
+        var source: Operand = Operand{ .location = location(r_m, mod, bytes[2..4], signed, wide, false) };
 
         if (d == 0) {
             dest = source;
@@ -773,40 +851,48 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8, alloc: Allocator) !In
     }
 }
 
-fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, signed: bool) EffAddressCalc {
-    //std.debug.print("r_m {b}, mod {b}\n\n", .{ r_m, mod });
+fn location(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, prefix: bool) Location {
+    var byte_value: u16 = 0;
+    var word_value: u16 = 0;
 
-    const byte_value = decode_value(bytes[0..1], signed);
-    const word_value = decode_value(bytes[0..2], signed);
+    if (mod == 0b10 or (r_m == 0b110 and mod == 0b00)) {
+        word_value = @as(u16, @intCast(decode_value(bytes[0..2], signed)));
+    }
+    if (mod == 0b01) {
+        byte_value = @as(u16, @intCast(decode_value(bytes[0..1], signed)));
+    }
 
     if (r_m == 0b000 and mod == 0b00) {
-        return EffAddressCalc{ .registers = "bx + si" };
+        return Location{
+            .reg1 = RegisterName.bx,
+            .reg2 = RegisterName.si,
+        };
     } else if (r_m == 0b000 and mod == 0b01) {
-        return EffAddressCalc{ .registers = "bx + si", .displacement = byte_value };
+        return Location{ .reg1 = RegisterName.bx, .reg2 = RegisterName.si, .displacement = byte_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b000 and mod == 0b10) {
-        return EffAddressCalc{ .registers = "bx + si", .displacement = word_value };
+        return Location{ .reg1 = RegisterName.bx, .reg2 = RegisterName.si, .displacement = word_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b001 and mod == 0b00) {
-        return EffAddressCalc{ .registers = "bx + di" };
+        return Location{ .reg1 = RegisterName.bx, .reg2 = RegisterName.di, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b001 and mod == 0b01) {
         unreachable;
     } else if (r_m == 0b001 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b010 and mod == 0b00) {
-        return EffAddressCalc{ .registers = "bp + si" };
+        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.si };
     } else if (r_m == 0b010 and mod == 0b01) {
-        return EffAddressCalc{ .registers = "bp + si", .displacement = byte_value };
+        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.si, .displacement = byte_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b010 and mod == 0b10) {
-        return EffAddressCalc{ .registers = "bp + si", .displacement = word_value };
+        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.si, .displacement = word_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b011 and mod == 0b10) {
-        return EffAddressCalc{ .registers = "bp + di", .displacement = word_value };
+        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.di, .displacement = word_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b011 and mod == 0b00) {
-        return EffAddressCalc{ .registers = "bp + di" };
+        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.di, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b011 and mod == 0b01) {
-        return EffAddressCalc{ .registers = "bp + di", .displacement = byte_value };
+        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.di, .displacement = byte_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b100 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b100 and mod == 0b00) {
-        return EffAddressCalc{ .registers = "si" };
+        return Location{ .reg1 = RegisterName.si };
     } else if (r_m == 0b100 and mod == 0b01) {
         unreachable;
     } else if (r_m == 0b101 and mod == 0b10) {
@@ -819,15 +905,16 @@ fn effective_address_calculation(r_m: u8, mod: u8, bytes: []u8, signed: bool) Ef
         unreachable;
     } else if (r_m == 0b110 and mod == 0b00) {
         // direct address
-        return EffAddressCalc{ .registers = "none", .direct_address = word_value };
+
+        return Location{ .displacement = word_value, .wide = wide, .prefix = prefix };
     } else if (r_m == 0b110 and mod == 0b01) {
-        return EffAddressCalc{ .registers = "bp", .displacement = byte_value };
+        return Location{ .reg1 = RegisterName.bp, .displacement = byte_value, .prefix = prefix };
     } else if (r_m == 0b111 and mod == 0b10) {
         unreachable;
     } else if (r_m == 0b111 and mod == 0b00) {
-        return EffAddressCalc{ .registers = "bx" };
+        return Location{ .reg1 = RegisterName.bx };
     } else if (r_m == 0b111 and mod == 0b01) {
-        return EffAddressCalc{ .registers = "bx", .displacement = byte_value };
+        return Location{ .reg1 = RegisterName.bx, .displacement = byte_value, .wide = wide, .prefix = prefix };
     } else {
         unreachable;
     }
