@@ -78,6 +78,24 @@ const Location = struct {
     reg2: ?RegisterName = null,
     displacement: ?u16 = null,
 
+    pub fn address(self: Location, proc: *Processor) u16 {
+        var addr: u16 = 0;
+
+        if (self.reg1) |reg1| {
+            addr += proc.read_reg(reg1);
+        }
+
+        if (self.reg2) |reg2| {
+            addr += proc.read_reg(reg2);
+        }
+
+        if (self.displacement) |displacement| {
+            addr += displacement;
+        }
+
+        return addr;
+    }
+
     pub fn string(self: Location, alloc: Allocator) ![]const u8 {
         var prefix_str: []const u8 = "";
         var effective_address_str: []const u8 = "";
@@ -100,25 +118,7 @@ const Location = struct {
             unreachable;
         }
 
-        // if () {
-        //     str = try std.fmt.allocPrint(alloc, "[{s} + {d}]", .{ eac.registers, eac.displacement });
-        // } else if (self.displacement) |displacement| {
-        //     str = try std.fmt.allocPrint(alloc, "[{d}]", .{displacement});
-        // } else {
-        //     str = try std.fmt.allocPrint(alloc, "[{s}]", .{eac.registers});
-        // }
-
-        // var prefix: []const u8 = undefined;
-
-        // if (add_prefix) {
-        //     prefix = if (wide) "word " else "byte ";
-        // } else {
-        //     prefix = "";
-        // }
-
         return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix_str, effective_address_str });
-
-        // return try std.fmt.allocPrint(alloc, "{s}{s}", .{ prefix, str });
     }
 };
 
@@ -181,27 +181,34 @@ const Processor = struct {
         };
     }
 
+    pub fn read_reg(self: *Processor, register: RegisterName) u16 {
+        return switch (register) {
+            RegisterName.ax => self.ax,
+            RegisterName.bx => self.bx,
+            RegisterName.cx => self.cx,
+            RegisterName.dx => self.dx,
+            RegisterName.sp => self.sp,
+            RegisterName.bp => self.bp,
+            RegisterName.si => self.si,
+            RegisterName.di => self.di,
+            else => unreachable,
+        };
+    }
+
     pub fn read(self: *Processor, operand: Operand) u16 {
         switch (operand) {
             Operand.register => |register| {
-                return switch (register) {
-                    RegisterName.ax => self.ax,
-                    RegisterName.bx => self.bx,
-                    RegisterName.cx => self.cx,
-                    RegisterName.dx => self.dx,
-                    RegisterName.sp => self.sp,
-                    RegisterName.bp => self.bp,
-                    RegisterName.si => self.si,
-                    RegisterName.di => self.di,
-                    else => unreachable,
-                };
+                return read_reg(self, register);
             },
             Operand.value => |value| {
                 return value;
             },
             Operand.location => |loc| {
-                _ = loc;
-                unreachable;
+                if (loc.displacement) |displacement| {
+                    return self.memory[displacement];
+                } else {
+                    unreachable;
+                }
             },
         }
     }
@@ -219,6 +226,19 @@ const Processor = struct {
                     RegisterName.si => self.si = value,
                     RegisterName.di => self.di = value,
                     else => unreachable,
+                }
+            },
+            Operand.location => |loc| {
+                const address = loc.address(self);
+
+                if (loc.wide) {
+                    const high_bits: u8 = @as(u8, @intCast((value & 0b1111_1111_0000_0000) << 8));
+                    const low_bits: u8 = @as(u8, @truncate(value));
+
+                    self.memory[address] = low_bits;
+                    self.memory[address + 1] = high_bits;
+                } else {
+                    self.memory[address] = @as(u8, @truncate(value));
                 }
             },
             else => unreachable,
@@ -343,17 +363,20 @@ fn simulate_instruction(inst: Instr, proc: *Processor) !void {
     const new_flags = proc.flags();
     const new_ip = proc.ip;
 
-    if (inst.jmp_offset != null) {
-        try stdout.print(" ; ip:0x{x}->0x{x}", .{ old_ip, new_ip });
-    } else if (inst.name != InstrName.cmp) {
-        try stdout.print(" ; {s}:0x{x}->0x{x} ip:0x{x}->0x{x}", .{ inst.dest.?.register.string(), old_value, new_value, old_ip, new_ip });
-    } else {
-        try stdout.print(" ;", .{});
+    try stdout.print(" ; ", .{});
+
+    if (inst.dest != null and inst.dest.? == OperandTag.register) {
+        try stdout.print("{s}:0x{x}->0x{x} ", .{
+            inst.dest.?.register.string(),
+            old_value,
+            new_value,
+        });
     }
+
+    try stdout.print("ip:0x{x}->0x{x} ", .{ old_ip, new_ip });
+
     if (!std.mem.eql(u8, old_flags, new_flags)) {
-        try stdout.print(" flags:{s}->{s} ", .{ old_flags, new_flags });
-    } else {
-        try stdout.print(" ", .{});
+        try stdout.print("flags:{s}->{s} ", .{ old_flags, new_flags });
     }
 }
 
@@ -364,6 +387,7 @@ fn print_proc(proc: *Processor) !void {
         .{ .name = "ax", .value = proc.ax },
         .{ .name = "bx", .value = proc.bx },
         .{ .name = "cx", .value = proc.cx },
+        .{ .name = "dx", .value = proc.dx },
         .{ .name = "sp", .value = proc.sp },
         .{ .name = "bp", .value = proc.bp },
         .{ .name = "si", .value = proc.si },
