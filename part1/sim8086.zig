@@ -13,7 +13,7 @@
 const std = @import("std");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
-const FixedBufferAllocator = std.heap.FixedBufferAllocator;
+const GeneralPurposeAllocator = std.heap.GeneralPurposeAllocator;
 
 const stdout = std.io.getStdOut().writer();
 
@@ -98,7 +98,8 @@ const Location = struct {
 
     pub fn string(self: Location, alloc: Allocator) ![]const u8 {
         var prefix_str: []const u8 = "";
-        var effective_address_str: []const u8 = "";
+        var effective_address_str: []const u8 = undefined;
+        defer alloc.free(effective_address_str);
 
         if (self.prefix) {
             prefix_str = if (self.wide) "word " else "byte ";
@@ -130,7 +131,8 @@ const Operand = union(OperandTag) {
 
     pub fn string(self: Operand, alloc: Allocator) ![]const u8 {
         return switch (self) {
-            Operand.register => self.register.string(),
+            // allocate so the caller can deallocate consistently
+            Operand.register => try std.fmt.allocPrint(alloc, "{s}", .{self.register.string()}),
             Operand.location => self.location.string(alloc),
             Operand.value => try std.fmt.allocPrint(alloc, "{d}", .{self.value}),
         };
@@ -251,9 +253,8 @@ const Processor = struct {
 };
 
 pub fn main() !void {
-    var buffer: [20_000]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const alloc = fba.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = gpa.allocator();
 
     //std.debug.print("allocator: {d} \n", .{fba.end_index});
 
@@ -292,6 +293,7 @@ pub fn main() !void {
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
     try file.seekTo(0);
+    var buffer: [10_000]u8 = undefined;
     const bytes_read = try file.readAll(&buffer);
 
     //const bytes_read = try decode(filename, alloc, &instructions);
@@ -404,12 +406,28 @@ fn print_proc(proc: *Processor) !void {
     try stdout.print("   flags: {s}\r\n\r\n", .{proc.flags()});
 }
 
+test "allocPrint usage" {
+    const alloc = std.testing.allocator;
+    const str = try std.fmt.allocPrint(alloc, "[{d} {d}]", .{ 1, 2 });
+    defer alloc.free(str);
+    try stdout.print("      {s}\r\n", .{str});
+}
+
 fn print_instruction(instr: Instr, alloc: Allocator) !void {
     if (instr.jmp_offset) |label| {
         try stdout.print("{s} ${d}", .{ instr.name.string(), label + instr.bytes_read });
     } else if (instr.dest) |dest| {
         if (instr.source) |source| {
-            try stdout.print("{s} {s}, {s}", .{ instr.name.string(), try dest.string(alloc), try source.string(alloc) });
+            const s1: []const u8 = try dest.string(alloc);
+            const s2: []const u8 = try source.string(alloc);
+
+            try stdout.print("s1: {s}, ptr {*} , len {d}\n", .{ s1, s1.ptr, s1.len });
+            try stdout.print("s2: {s}, ptr {*} , len {d}\n", .{ s2, s2.ptr, s2.len });
+
+            defer alloc.free(s1);
+            defer alloc.free(s2);
+
+            try stdout.print("{s} {s}, {s}", .{ instr.name.string(), s1, s2 });
         } else {
             unreachable;
         }
