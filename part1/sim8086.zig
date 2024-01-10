@@ -256,8 +256,6 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    //std.debug.print("allocator: {d} \n", .{fba.end_index});
-
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
@@ -273,39 +271,31 @@ pub fn main() !void {
         unreachable;
     }
 
-    //std.debug.print("allocator: {d} \n", .{fba.end_index});
-
-    //var instructions: []Instr = try alloc.alloc(Instr, 100);
-
-    // std.debug.print("size of InstrName {}\n", .{@sizeOf(InstrName)});
-    // std.debug.print("size of RegisterName {}\n", .{@sizeOf(RegisterName)});
-    // std.debug.print("size of Operand {}\n", .{@sizeOf(Operand)});
-    // std.debug.print("size of usize {}\n", .{@sizeOf(usize)});
-    // std.debug.print("size of i32 {}\n", .{@sizeOf(i32)});
-    // std.debug.print("size of []const u8 {}\n", .{@sizeOf([]const u8)});
-    // std.debug.print("size of OperandTag {}\n", .{@sizeOf(OperandTag)});
-    // std.debug.print("size of Instr {}\n", .{@sizeOf(Instr)});
-
-    //defer alloc.free(instructions);
-
-    //std.debug.print("allocator: {d} \n", .{fba.end_index});
-
     var file = try fs.cwd().openFile(filename, .{});
     defer file.close();
     try file.seekTo(0);
     var buffer: [10_000]u8 = undefined;
     const bytes_read = try file.readAll(&buffer);
 
-    //const bytes_read = try decode(filename, alloc, &instructions);
-
     if (exec) {
         var memory = [_]u8{0} ** 65536;
         var proc = Processor{ .memory = &memory };
         try simulate_instructions(&buffer, bytes_read, &proc, alloc);
         try print_proc(&proc);
+        try dump_results_to_file(proc);
     } else {
         try print_instructions(&buffer, bytes_read, alloc);
     }
+}
+
+fn dump_results_to_file(proc: Processor) !void {
+    const file = try std.fs.cwd().createFile(
+        "dump.data",
+        .{ .read = true },
+    );
+    defer file.close();
+
+    try file.writeAll(proc.memory);
 }
 
 fn simulate_instructions(buffer: []u8, bytes_read: usize, proc: *Processor, alloc: Allocator) !void {
