@@ -2,6 +2,7 @@
 // zig run sim8086.zig -- <binary file>
 
 // Manual is https://edge.edx.org/c4x/BITSPilani/EEE231/asset/8086_family_Users_Manual_1_.pdf (page 164)
+// Page 64 for clocks
 
 // To debug
 // zig build-exe sim8086.zig
@@ -11,11 +12,13 @@
 // run
 
 const std = @import("std");
+const cli = @import("zig-cli");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
 const GeneralPurposeAllocator = std.heap.GeneralPurposeAllocator;
-
 const stdout = std.io.getStdOut().writer();
+
+const ClockMode = enum { none, show, explain };
 
 const InstrName = enum {
     mov,
@@ -126,8 +129,8 @@ const Location = struct {
 const OperandTag = enum { register, location, value };
 const Operand = union(OperandTag) {
     register: RegisterName,
-    value: u16,
     location: Location,
+    value: u16,
 
     pub fn string(self: Operand, alloc: Allocator) ![]const u8 {
         return switch (self) {
@@ -252,39 +255,110 @@ const Processor = struct {
     }
 };
 
+var config = struct {
+    exec: bool = false,
+    filename: []const u8 = undefined,
+    show_clocks: bool = false,
+    explain_clocks: bool = false,
+}{};
+
+var exec_opt = cli.Option{
+    .long_name = "exec",
+    .help = "Execute the instructions",
+    .value_ref = cli.mkRef(&config.exec),
+};
+
+var filename_arg = cli.PositionalArg{
+    .name = "filename",
+    .help = "Binary file",
+    .value_ref = cli.mkRef(&config.filename),
+};
+
+var show_clocks_opt = cli.Option{
+    .long_name = "showclocks",
+    .help = "Show estimated clocks per instruction",
+    .value_ref = cli.mkRef(&config.show_clocks),
+};
+
+var explain_clocks_opt = cli.Option{
+    .long_name = "explainclocks",
+    .help = "Show estimated clocks per instruction (with explanation)",
+    .value_ref = cli.mkRef(&config.explain_clocks),
+};
+
+var app = &cli.App{
+    .command = cli.Command{
+        .name = "sim8086",
+        .description = cli.Description{
+            .one_line = "A basic 8086 simualtor",
+        },
+        .options = &.{ &exec_opt, &show_clocks_opt, &explain_clocks_opt },
+        .target = cli.CommandTarget{
+            .action = cli.CommandAction{ .positional_args = cli.PositionalArgs{ .args = &.{
+                &filename_arg,
+            } }, .exec = run },
+        },
+    },
+    .version = "0.0.1",
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
+    try cli.run(app, alloc);
 
-    var filename: []const u8 = undefined;
-    var exec: bool = false;
+    // const args = try std.process.argsAlloc(alloc);
+    // defer std.process.argsFree(alloc, args);
 
-    if (args.len == 2) {
-        filename = args[1];
-    } else if (args.len == 3 and std.mem.eql(u8, args[1], "--exec")) {
-        exec = true;
-        filename = args[2];
-    } else {
-        unreachable;
-    }
+    // var filename: []const u8 = undefined;
+    // var exec: bool = false;
+    // var clock_mode: ClockMode = ClockMode.none;
 
-    var file = try fs.cwd().openFile(filename, .{});
+    // if (args.len == 2) {
+    //     filename = args[1];
+    // } else if (args.len == 3) {
+    //     filename = args[2];
+    //     if (std.mem.eql(u8, args[1], "--exec")) {
+    //         exec = true;
+    //     } else if (std.mem.eql(u8, args[1], "--showclocks")) {
+    //         clock_mode = ClockMode.show;
+    //     } else if (std.mem.eql(u8, args[1], "--explainclocks")) {
+    //         clock_mode = ClockMode.explain;
+    //     }
+    // } else {
+    //     unreachable;
+    // }
+}
+
+fn run() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = gpa.allocator();
+
+    const c = &config;
+
+    var file = try fs.cwd().openFile(c.filename, .{});
     defer file.close();
     try file.seekTo(0);
     var buffer: [10_000]u8 = undefined;
     const bytes_read = try file.readAll(&buffer);
 
-    if (exec) {
+    var clock_mode = ClockMode.none;
+
+    if (c.show_clocks) {
+        clock_mode = ClockMode.show;
+    } else if (c.explain_clocks) {
+        clock_mode = ClockMode.explain;
+    }
+
+    if (c.exec) {
         var memory = [_]u8{0} ** 65536;
         var proc = Processor{ .memory = &memory };
-        try simulate_instructions(&buffer, bytes_read, &proc, alloc);
+        try simulate_instructions(&buffer, bytes_read, &proc, alloc, clock_mode);
         try print_proc(&proc);
         try dump_results_to_file(proc);
     } else {
-        try print_instructions(&buffer, bytes_read, alloc);
+        try print_instructions(&buffer, bytes_read, alloc, clock_mode);
     }
 }
 
@@ -298,10 +372,10 @@ fn dump_results_to_file(proc: Processor) !void {
     try file.writeAll(proc.memory);
 }
 
-fn simulate_instructions(buffer: []u8, bytes_read: usize, proc: *Processor, alloc: Allocator) !void {
+fn simulate_instructions(buffer: []u8, bytes_read: usize, proc: *Processor, alloc: Allocator, clock_mode: ClockMode) !void {
     while (proc.ip < bytes_read) {
-        var instr = try decode_instruction(buffer[proc.ip..]);
-        try print_instruction(instr, alloc);
+        const instr = try decode_instruction(buffer[proc.ip..]);
+        try print_instruction(instr, alloc, clock_mode);
         try simulate_instruction(instr, proc);
         try stdout.print("\r\n", .{}); // stupid windows
     }
@@ -403,19 +477,24 @@ test "allocPrint usage" {
     try stdout.print("      {s}\r\n", .{str});
 }
 
-fn print_instruction(instr: Instr, alloc: Allocator) !void {
+fn show_clocks(instr: Instr, alloc: Allocator, clock_mode: ClockMode) ![]const u8 {
+    _ = clock_mode;
+    _ = instr;
+    return try std.fmt.allocPrint(alloc, "", .{});
+}
+
+fn print_instruction(instr: Instr, alloc: Allocator, clock_mode: ClockMode) !void {
     if (instr.jmp_offset) |label| {
         try stdout.print("{s} ${d}", .{ instr.name.string(), label + instr.bytes_read });
     } else if (instr.dest) |dest| {
         if (instr.source) |source| {
             const s1: []const u8 = try dest.string(alloc);
             const s2: []const u8 = try source.string(alloc);
-
-            try stdout.print("s1: {s}, ptr {*} , len {d}\n", .{ s1, s1.ptr, s1.len });
-            try stdout.print("s2: {s}, ptr {*} , len {d}\n", .{ s2, s2.ptr, s2.len });
+            const s3: []const u8 = try show_clocks(instr, alloc, clock_mode);
 
             defer alloc.free(s1);
             defer alloc.free(s2);
+            defer alloc.free(s3);
 
             try stdout.print("{s} {s}, {s}", .{ instr.name.string(), s1, s2 });
         } else {
@@ -426,17 +505,17 @@ fn print_instruction(instr: Instr, alloc: Allocator) !void {
     }
 }
 
-fn print_instructions(buffer: []u8, bytes_read: usize, alloc: Allocator) !void {
+fn print_instructions(buffer: []u8, bytes_read: usize, alloc: Allocator, clock_mode: ClockMode) !void {
     try stdout.print("bits 16\n\n", .{});
 
     var i: u16 = 0;
 
     while (i < bytes_read) {
-        var instr = try decode_instruction(
+        const instr = try decode_instruction(
             buffer[i..],
         );
         i += instr.bytes_read;
-        try print_instruction(instr, alloc);
+        try print_instruction(instr, alloc, clock_mode);
         try stdout.print("\n", .{});
     }
 }
@@ -805,8 +884,8 @@ test "decode_any_regmem_to_memreg" {
         0b11101000, // 1000 (lower bits)
         0b00000011, // 1000 (upper bits, more significant)
     };
-    var actual = try decode_any_regmem_to_regmem(InstrName.mov, &bytes);
-    var expected = Instr{
+    const actual = try decode_any_regmem_to_regmem(InstrName.mov, &bytes);
+    const expected = Instr{
         .name = InstrName.mov,
         .bytes_read = 4,
         .dest = Operand{ .register = RegisterName.bx },
@@ -884,74 +963,36 @@ fn decode_any_regmem_to_regmem(op: InstrName, bytes: []u8) !Instr {
 }
 
 fn location(r_m: u8, mod: u8, bytes: []u8, signed: bool, wide: bool, prefix: bool) Location {
-    var byte_value: u16 = 0;
-    var word_value: u16 = 0;
+    const displacement_value: u16 = if (mod == 0b01) @as(u16, @intCast(decode_value(bytes[0..1], signed))) else if (mod == 0b10 or (r_m == 0b110 and mod == 0b00)) @as(u16, @intCast(decode_value(bytes[0..2], signed))) else 0;
 
-    if (mod == 0b10 or (r_m == 0b110 and mod == 0b00)) {
-        word_value = @as(u16, @intCast(decode_value(bytes[0..2], signed)));
-    }
-    if (mod == 0b01) {
-        byte_value = @as(u16, @intCast(decode_value(bytes[0..1], signed)));
-    }
+    const reg1: RegisterName = switch (r_m) {
+        0b000, 0b001, 0b111 => RegisterName.bx,
+        0b010, 0b011, 0b110 => RegisterName.bp,
+        0b100 => RegisterName.si,
+        0b101 => RegisterName.di,
+        else => unreachable,
+    };
 
-    if (r_m == 0b000 and mod == 0b00) {
-        return Location{
-            .reg1 = RegisterName.bx,
-            .reg2 = RegisterName.si,
-        };
-    } else if (r_m == 0b000 and mod == 0b01) {
-        return Location{ .reg1 = RegisterName.bx, .reg2 = RegisterName.si, .displacement = byte_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b000 and mod == 0b10) {
-        return Location{ .reg1 = RegisterName.bx, .reg2 = RegisterName.si, .displacement = word_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b001 and mod == 0b00) {
-        return Location{ .reg1 = RegisterName.bx, .reg2 = RegisterName.di, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b001 and mod == 0b01) {
-        unreachable;
-    } else if (r_m == 0b001 and mod == 0b10) {
-        unreachable;
-    } else if (r_m == 0b010 and mod == 0b00) {
-        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.si };
-    } else if (r_m == 0b010 and mod == 0b01) {
-        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.si, .displacement = byte_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b010 and mod == 0b10) {
-        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.si, .displacement = word_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b011 and mod == 0b10) {
-        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.di, .displacement = word_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b011 and mod == 0b00) {
-        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.di, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b011 and mod == 0b01) {
-        return Location{ .reg1 = RegisterName.bp, .reg2 = RegisterName.di, .displacement = byte_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b100 and mod == 0b10) {
-        unreachable;
-    } else if (r_m == 0b100 and mod == 0b00) {
-        return Location{ .reg1 = RegisterName.si };
-    } else if (r_m == 0b100 and mod == 0b01) {
-        unreachable;
-    } else if (r_m == 0b101 and mod == 0b10) {
-        unreachable;
-    } else if (r_m == 0b101 and mod == 0b00) {
-        unreachable;
-    } else if (r_m == 0b101 and mod == 0b01) {
-        unreachable;
-    } else if (r_m == 0b110 and mod == 0b10) {
-        unreachable;
-    } else if (r_m == 0b110 and mod == 0b00) {
-        // direct address
+    const reg2: ?RegisterName = switch (r_m) {
+        0b000, 0b010 => RegisterName.si,
+        0b001, 0b011 => RegisterName.di,
+        else => null,
+    };
 
-        return Location{ .displacement = word_value, .wide = wide, .prefix = prefix };
-    } else if (r_m == 0b110 and mod == 0b01) {
-        return Location{ .reg1 = RegisterName.bp, .displacement = byte_value, .prefix = prefix };
-    } else if (r_m == 0b111 and mod == 0b10) {
-        unreachable;
-    } else if (r_m == 0b111 and mod == 0b00) {
-        return Location{ .reg1 = RegisterName.bx };
-    } else if (r_m == 0b111 and mod == 0b01) {
-        return Location{ .reg1 = RegisterName.bx, .displacement = byte_value, .wide = wide, .prefix = prefix };
-    } else {
-        unreachable;
+    // direct address
+    if (mod == 0b00 and r_m == 0b110) {
+        return Location{ .displacement = displacement_value, .wide = wide, .prefix = prefix };
     }
 
-    unreachable;
+    return Location{
+        .reg1 = reg1,
+        .reg2 = reg2,
+        .displacement = if (mod != 0b00) displacement_value else null,
+        //.wide = if (mod != 0b00) wide else false,
+        //.prefix = if (mod != 0b00) prefix else false,
+        .wide = wide,
+        .prefix = prefix,
+    };
 }
 
 // Register table is page 162
