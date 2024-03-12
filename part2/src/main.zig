@@ -77,6 +77,8 @@ const Config = struct {
     seed: u64 = undefined,
     method: []const u8 = "uniform",
     count: u64 = undefined,
+    generate: ?[]const u8 = null,
+    verify: ?[]const u8 = null,
 };
 
 const Allocator = std.mem.Allocator;
@@ -101,13 +103,25 @@ var count_opt = cli.Option{
     .value_ref = cli.mkRef(&config.count),
 };
 
+var generate_opt = cli.Option{
+    .long_name = "generate",
+    .help = "Base file name to write to. Will write x.json and x.f64",
+    .value_ref = cli.mkRef(&config.generate),
+};
+
+var verify_opt = cli.Option{
+    .long_name = "verify",
+    .help = "Base file name to read from. Will read x.json and x.f64",
+    .value_ref = cli.mkRef(&config.verify),
+};
+
 var app = &cli.App{
     .command = cli.Command{
         .name = "haversine_generator",
         .description = cli.Description{
             .one_line = "Generates points and computes haversine distance",
         },
-        .options = &.{ &seed_opt, &method_opt, &count_opt },
+        .options = &.{ &seed_opt, &method_opt, &count_opt, &generate_opt, &verify_opt },
         .target = cli.CommandTarget{ .action = cli.CommandAction{ .exec = run } },
     },
     .version = "0.0.1",
@@ -122,6 +136,11 @@ pub fn main() !void {
 
 pub fn run() !void {
     const stdout = std.io.getStdOut().writer();
+
+    if ((config.generate == null) and (config.verify == null)) {
+        try stdout.print("You must specificy --generate or --verify\n", .{});
+        return;
+    }
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
@@ -148,12 +167,20 @@ pub fn run() !void {
     defer alloc.free(distancesSlice);
 
     std.debug.print("-- writing bytes to disk\n", .{});
-    try writeBytes(distancesSlice);
+
+    const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate});
+    const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate});
+
+    try writeBytes(
+        distancesSlice,
+        avg,
+        binary_file_name,
+    );
 
     avg = avg / @as(f64, @floatFromInt(config.count));
 
     std.debug.print("-- writing json to disk\n", .{});
-    try print_json(pairs);
+    try print_json(pairs, json_file_name);
 
     try stdout.print("Method: {s}\n", .{config.method});
     try stdout.print("Random seed: {d}\n", .{config.seed});
@@ -161,8 +188,8 @@ pub fn run() !void {
     try stdout.print("Expected average: {d}\n", .{avg});
 }
 
-fn writeBytes(distances: []f64) !void {
-    var file = try fs.cwd().createFile("answers.f64", .{});
+fn writeBytes(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
+    var file = try fs.cwd().createFile(binary_file_name, .{});
     defer file.close();
 
     var bufferedWriter = std.io.bufferedWriter(file.writer());
@@ -171,6 +198,9 @@ fn writeBytes(distances: []f64) !void {
         const buffer: [8]u8 = std.mem.toBytes(distance);
         try bufferedWriter.writer().writeAll(&buffer);
     }
+
+    const buffer: [8]u8 = std.mem.toBytes(avg);
+    try bufferedWriter.writer().writeAll(&buffer);
 
     try bufferedWriter.flush();
 }
@@ -260,14 +290,14 @@ pub fn generate_pairs(c: Config, prng: *std.rand.Xoshiro256, alloc: Allocator) !
     return try pairs.toOwnedSlice();
 }
 
-pub fn print_json(pairs: []PointPair) !void {
+pub fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
     const data = Data{
         .pairs = pairs,
     };
 
     const options = std.json.StringifyOptions{};
 
-    var file = try fs.cwd().createFile("pairs.json", .{});
+    var file = try fs.cwd().createFile(json_file_name, .{});
     defer file.close();
 
     var bufferedWriter = std.io.bufferedWriter(file.writer());
