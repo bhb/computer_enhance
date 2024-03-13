@@ -145,47 +145,51 @@ pub fn run() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    var prng = std.rand.DefaultPrng.init(config.seed);
+    if (generate != null) {
+        var prng = std.rand.DefaultPrng.init(config.seed);
 
-    std.debug.print("-- starting pair generation\n", .{});
-    const pairs = try generate_pairs(config, &prng, alloc);
-    defer alloc.free(pairs);
+        std.debug.print("-- starting pair generation\n", .{});
+        const pairs = try generate_pairs(config, &prng, alloc);
+        defer alloc.free(pairs);
 
-    std.debug.print("-- writing reference numbers to disk\n", .{});
+        std.debug.print("-- writing reference numbers to disk\n", .{});
 
-    var avg: f64 = 0;
-    var distances = try std.ArrayList(f64).initCapacity(alloc, config.count);
-    defer distances.deinit();
+        var avg: f64 = 0;
+        var distances = try std.ArrayList(f64).initCapacity(alloc, config.count);
+        defer distances.deinit();
 
-    for (pairs) |pair| {
-        const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
-        distances.appendAssumeCapacity(dist);
-        avg += dist;
+        for (pairs) |pair| {
+            const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
+            distances.appendAssumeCapacity(dist);
+            avg += dist;
+        }
+
+        const distancesSlice = try distances.toOwnedSlice();
+        defer alloc.free(distancesSlice);
+
+        std.debug.print("-- writing bytes to disk\n", .{});
+
+        const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate});
+        const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate});
+
+        try writeBytes(
+            distancesSlice,
+            avg,
+            binary_file_name,
+        );
+
+        avg = avg / @as(f64, @floatFromInt(config.count));
+
+        std.debug.print("-- writing json to disk\n", .{});
+        try print_json(pairs, json_file_name);
+
+        try stdout.print("Method: {s}\n", .{config.method});
+        try stdout.print("Random seed: {d}\n", .{config.seed});
+        try stdout.print("Pair count: {d}\n", .{config.count});
+        try stdout.print("Expected average: {d}\n", .{avg});
+    } else if (verify != null) {
+        // HERE
     }
-
-    const distancesSlice = try distances.toOwnedSlice();
-    defer alloc.free(distancesSlice);
-
-    std.debug.print("-- writing bytes to disk\n", .{});
-
-    const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate});
-    const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate});
-
-    try writeBytes(
-        distancesSlice,
-        avg,
-        binary_file_name,
-    );
-
-    avg = avg / @as(f64, @floatFromInt(config.count));
-
-    std.debug.print("-- writing json to disk\n", .{});
-    try print_json(pairs, json_file_name);
-
-    try stdout.print("Method: {s}\n", .{config.method});
-    try stdout.print("Random seed: {d}\n", .{config.seed});
-    try stdout.print("Pair count: {d}\n", .{config.count});
-    try stdout.print("Expected average: {d}\n", .{avg});
 }
 
 fn writeBytes(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
