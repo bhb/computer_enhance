@@ -3,6 +3,8 @@ const fs = std.fs;
 const cli = @import("zig-cli");
 const math = std.math;
 
+const MismatchError = error{ DistanceMismatch, AvgMismatch };
+
 fn square(x: f64) f64 {
     return x * x;
 }
@@ -134,7 +136,7 @@ pub fn main() !void {
     try cli.run(app, alloc);
 }
 
-pub fn run() !void {
+fn run() !void {
     const stdout = std.io.getStdOut().writer();
 
     if ((config.generate == null) and (config.verify == null)) {
@@ -145,7 +147,10 @@ pub fn run() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    if (generate != null) {
+    const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate orelse config.verify});
+    const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate orelse config.verify});
+
+    if (config.generate != null) {
         var prng = std.rand.DefaultPrng.init(config.seed);
 
         std.debug.print("-- starting pair generation\n", .{});
@@ -160,6 +165,7 @@ pub fn run() !void {
 
         for (pairs) |pair| {
             const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
+            std.debug.print("answer {d}\n", .{dist});
             distances.appendAssumeCapacity(dist);
             avg += dist;
         }
@@ -169,10 +175,7 @@ pub fn run() !void {
 
         std.debug.print("-- writing bytes to disk\n", .{});
 
-        const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate});
-        const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate});
-
-        try writeBytes(
+        try writeAnswers(
             distancesSlice,
             avg,
             binary_file_name,
@@ -187,12 +190,36 @@ pub fn run() !void {
         try stdout.print("Random seed: {d}\n", .{config.seed});
         try stdout.print("Pair count: {d}\n", .{config.count});
         try stdout.print("Expected average: {d}\n", .{avg});
-    } else if (verify != null) {
-        // HERE
+    } else if (config.verify != null) {
+        const data: ParsedData = try readJson(json_file_name, alloc);
+        defer data.deinit();
+
+        const pairs = data.value.pairs;
+        //defer alloc.free(pairs);
+
+        const answers: []f64 = try readAnswers(binary_file_name, alloc);
+        defer alloc.free(answers);
+
+        var avg: f64 = 0;
+
+        for (pairs, 0..) |pair, i| {
+            const answer = answers[i];
+            const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
+            if (answer != dist) {
+                return MismatchError.DistanceMismatch;
+            }
+            avg += dist;
+        }
+
+        if (avg != answers[answers.len - 1]) {
+            return MismatchError.AvgMismatch;
+        }
+
+        try stdout.print("All values match.\n", .{});
     }
 }
 
-fn writeBytes(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
+fn writeAnswers(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
     var file = try fs.cwd().createFile(binary_file_name, .{});
     defer file.close();
 
@@ -203,10 +230,28 @@ fn writeBytes(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
         try bufferedWriter.writer().writeAll(&buffer);
     }
 
+    std.debug.print("writing avg {d}\n", .{avg});
+
     const buffer: [8]u8 = std.mem.toBytes(avg);
     try bufferedWriter.writer().writeAll(&buffer);
 
     try bufferedWriter.flush();
+}
+
+// caller must dealloc array
+fn readAnswers(binary_file_name: []u8, alloc: Allocator) ![]f64 {
+    const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
+    const data = try fs.cwd().readFileAlloc(alloc, binary_file_name, max_bytes);
+    const answers: []f64 = try alloc.alloc(f64, data.len / 8);
+
+    var idx: u64 = 0;
+    while (idx < data.len) : (idx += 8) {
+        var float_as_bytes: [8]u8 = [8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+        std.mem.copyForwards(u8, &float_as_bytes, data[idx .. idx + 8]);
+        const bitcast_float = @as(f64, @bitCast(std.mem.readInt(u64, &float_as_bytes, std.builtin.Endian.little)));
+        answers[idx / 8] = bitcast_float;
+    }
+    return answers;
 }
 
 const PointPair = struct {
@@ -222,7 +267,7 @@ const Data = struct {
 
 const EarthRadius = 6372.8;
 
-pub fn generate_pairs(c: Config, prng: *std.rand.Xoshiro256, alloc: Allocator) ![]PointPair {
+fn generate_pairs(c: Config, prng: *std.rand.Xoshiro256, alloc: Allocator) ![]PointPair {
     var pairs = try std.ArrayList(PointPair).initCapacity(alloc, c.count);
     defer pairs.deinit();
 
@@ -294,7 +339,7 @@ pub fn generate_pairs(c: Config, prng: *std.rand.Xoshiro256, alloc: Allocator) !
     return try pairs.toOwnedSlice();
 }
 
-pub fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
+fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
     const data = Data{
         .pairs = pairs,
     };
@@ -309,4 +354,16 @@ pub fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
     try std.json.stringify(data, options, bufferedWriter.writer());
 
     try bufferedWriter.flush();
+}
+
+const ParsedData = std.json.Parsed(Data);
+
+// caller must clean up data
+fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
+    const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
+    const string = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
+    defer alloc.free(string);
+
+    const data = try std.json.parseFromSlice(Data, alloc, string, .{});
+    return data;
 }
