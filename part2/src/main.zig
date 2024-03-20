@@ -165,7 +165,6 @@ fn run() !void {
 
         for (pairs) |pair| {
             const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
-            std.debug.print("answer {d}\n", .{dist});
             distances.appendAssumeCapacity(dist);
             avg += dist;
         }
