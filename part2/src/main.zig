@@ -1,8 +1,9 @@
 const std = @import("std");
 const fs = std.fs;
 const cli = @import("zig-cli");
-const math = std.math;
+const platform = @import("./platform.zig");
 
+const math = std.math;
 const MismatchError = error{ DistanceMismatch, AvgMismatch };
 
 fn square(x: f64) f64 {
@@ -365,4 +366,8 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
 
     const data = try std.json.parseFromSlice(Data, alloc, string, .{});
     return data;
+}
+
+test "readOSTimer" {
+    std.debug.print("hi {d}\n", .{platform.readOSTimer()});
 }
