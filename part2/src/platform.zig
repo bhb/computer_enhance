@@ -39,3 +39,27 @@ pub fn readCpuTimer() u64 {
 
     return val;
 }
+
+pub fn estimateCpuFreq(msToWait: u64) u64 {
+    const cpu_start = readCpuTimer();
+    const os_start = readOsTimer();
+    var os_end: u64 = 0;
+    var os_elapsed: u64 = 0;
+
+    const osWaitTime = OsTimerFreq * msToWait / 1000;
+
+    while (os_elapsed < osWaitTime) {
+        os_end = readOsTimer();
+        os_elapsed = os_end - os_start;
+    }
+
+    const cpu_end = readCpuTimer();
+    const cpu_elapsed = cpu_end - cpu_start;
+    var cpu_freq: u64 = undefined;
+
+    if (0 < os_elapsed) {
+        cpu_freq = OsTimerFreq * cpu_elapsed / os_elapsed;
+    }
+
+    return cpu_freq;
+}

@@ -369,9 +369,14 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
 }
 
 test "readOSTimer" {
-    try std.testing.expect(1 < platform.readOSTimer());
+    try std.testing.expect(1 < platform.readOsTimer());
 }
 
 test "readCpuTimer" {
     try std.testing.expect(1 < platform.readCpuTimer());
+}
+
+test "estimateCpuFreq" {
+    try std.testing.expect(24_000_000 < platform.estimateCpuFreq(1000));
+    try std.testing.expect(24_000_000 < platform.estimateCpuFreq(100));
 }
