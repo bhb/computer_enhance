@@ -82,6 +82,7 @@ const Config = struct {
     count: u64 = undefined,
     generate: ?[]const u8 = null,
     verify: ?[]const u8 = null,
+    profile: bool = false,
 };
 
 const Allocator = std.mem.Allocator;
@@ -118,13 +119,19 @@ var verify_opt = cli.Option{
     .value_ref = cli.mkRef(&config.verify),
 };
 
+var profile_opt = cli.Option{
+    .long_name = "profile",
+    .help = "Print profiling information for each step",
+    .value_ref = cli.mkRef(&config.profile),
+};
+
 var app = &cli.App{
     .command = cli.Command{
         .name = "haversine_generator",
         .description = cli.Description{
             .one_line = "Generates points and computes haversine distance",
         },
-        .options = &.{ &seed_opt, &method_opt, &count_opt, &generate_opt, &verify_opt },
+        .options = &.{ &seed_opt, &method_opt, &count_opt, &generate_opt, &verify_opt, &profile_opt },
         .target = cli.CommandTarget{ .action = cli.CommandAction{ .exec = run } },
     },
     .version = "0.0.1",
@@ -138,12 +145,15 @@ pub fn main() !void {
 }
 
 fn run() !void {
+    const prof_begin = platform.readCpuTimer();
     const stdout = std.io.getStdOut().writer();
 
     if ((config.generate == null) and (config.verify == null)) {
         try stdout.print("You must specificy --generate or --verify\n", .{});
         return;
     }
+
+    const prof_misc_setup = platform.readCpuTimer();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
@@ -191,16 +201,20 @@ fn run() !void {
         try stdout.print("Pair count: {d}\n", .{config.count});
         try stdout.print("Expected average: {d}\n", .{avg});
     } else if (config.verify != null) {
+        const prof_read = platform.readCpuTimer();
+        const answers: []f64 = try readAnswers(binary_file_name, alloc);
+        defer alloc.free(answers);
+
+        const prof_parse = platform.readCpuTimer();
+
         const data: ParsedData = try readJson(json_file_name, alloc);
         defer data.deinit();
 
         const pairs = data.value.pairs;
-        //defer alloc.free(pairs);
-
-        const answers: []f64 = try readAnswers(binary_file_name, alloc);
-        defer alloc.free(answers);
 
         var avg: f64 = 0;
+
+        const prof_sum = platform.readCpuTimer();
 
         for (pairs, 0..) |pair, i| {
             const answer = answers[i];
@@ -211,12 +225,38 @@ fn run() !void {
             avg += dist;
         }
 
+        const prof_misc_output = platform.readCpuTimer();
+
         if (avg != answers[answers.len - 1]) {
             return MismatchError.AvgMismatch;
         }
 
         try stdout.print("All values match.\n", .{});
+
+        const prof_end = platform.readCpuTimer();
+
+        if (config.profile) {
+            const cpu_freq: u64 = platform.estimateCpuFreq(100);
+            const total_cpu_elapsed = prof_end - prof_begin;
+
+            try stdout.print("Total time: {d:.2}ms (CPU freq {d})\n", .{ 1000.0 * @as(f64, @floatFromInt(total_cpu_elapsed)) / @as(f64, @floatFromInt(cpu_freq)), cpu_freq });
+
+            try printTimeElapsed(stdout, "Startup", total_cpu_elapsed, prof_begin, prof_misc_setup);
+
+            try printTimeElapsed(stdout, "MiscSetup", total_cpu_elapsed, prof_misc_setup, prof_read);
+            try printTimeElapsed(stdout, "Read", total_cpu_elapsed, prof_read, prof_parse);
+            try printTimeElapsed(stdout, "Parse", total_cpu_elapsed, prof_parse, prof_sum);
+            try printTimeElapsed(stdout, "Sum", total_cpu_elapsed, prof_sum, prof_misc_output);
+            try printTimeElapsed(stdout, "MiscOutput", total_cpu_elapsed, prof_misc_output, prof_end);
+        }
     }
+}
+
+fn printTimeElapsed(stdout: std.fs.File.Writer, label: []const u8, total: u64, begin: u64, end: u64) !void {
+    const elapsed = (end - begin);
+    const portion = 100.0 * @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total));
+
+    try stdout.print("{s}: {d} ({d:.2}%)\n", .{ label, elapsed, portion });
 }
 
 fn writeAnswers(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
