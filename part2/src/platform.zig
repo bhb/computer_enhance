@@ -4,9 +4,9 @@ const time = @cImport({
     @cInclude("sys/time.h");
 });
 
-const OsTimerFreq = 1_000_000;
+pub const OsTimerFreq = 1_000_000;
 
-pub fn readOSTimer() i64 {
+pub fn readOsTimer() u64 {
     var value = time.timeval{
         .tv_sec = 0, // Seconds
         .tv_usec = 0, // Microseconds
@@ -14,7 +14,7 @@ pub fn readOSTimer() i64 {
 
     _ = time.gettimeofday(&value, null);
 
-    return value.tv_sec;
+    return OsTimerFreq * @as(u64, @bitCast(value.tv_sec)) + @as(u32, @bitCast(value.tv_usec));
 }
 
 // Might need antoher instruction to figure out timer frequency?
