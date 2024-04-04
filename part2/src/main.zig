@@ -1,7 +1,9 @@
 const std = @import("std");
 const fs = std.fs;
 const cli = @import("zig-cli");
-const platform = @import("./platform.zig");
+const profiler = @import("./profiler.zig");
+const Profiler = profiler.Profiler;
+const ProfilerEntry = profiler.ProfilerEntry;
 
 const math = std.math;
 const MismatchError = error{ DistanceMismatch, AvgMismatch };
@@ -145,7 +147,11 @@ pub fn main() !void {
 }
 
 fn run() !void {
-    const prof_begin = platform.readCpuTimer();
+    var entries: [10]ProfilerEntry = [_]ProfilerEntry{ProfilerEntry{}} ** 10;
+    var prof = Profiler.init(&entries);
+
+    const pr_id1 = prof.start("Total");
+
     const stdout = std.io.getStdOut().writer();
 
     if ((config.generate == null) and (config.verify == null)) {
@@ -153,13 +159,15 @@ fn run() !void {
         return;
     }
 
-    const prof_misc_setup = platform.readCpuTimer();
+    const pr_id2 = prof.start("Misc Setup");
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
     const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate orelse config.verify});
     const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate orelse config.verify});
+
+    prof.stop(pr_id2);
 
     if (config.generate != null) {
         var prng = std.rand.DefaultPrng.init(config.seed);
@@ -201,31 +209,29 @@ fn run() !void {
         try stdout.print("Pair count: {d}\n", .{config.count});
         try stdout.print("Expected average: {d}\n", .{avg});
     } else if (config.verify != null) {
-        const prof_read = platform.readCpuTimer();
-        const answers: []f64 = try readAnswers(binary_file_name, alloc);
+        const answers: []f64 = try readAnswers(binary_file_name, alloc, &prof);
         defer alloc.free(answers);
 
-        const prof_parse = platform.readCpuTimer();
-
-        const data: ParsedData = try readJson(json_file_name, alloc);
+        const data: ParsedData = try readJson(json_file_name, alloc, &prof);
         defer data.deinit();
 
         const pairs = data.value.pairs;
 
         var avg: f64 = 0;
 
-        const prof_sum = platform.readCpuTimer();
+        {
+            const pr_id = prof.start("Sum");
+            defer prof.stop(pr_id);
 
-        for (pairs, 0..) |pair, i| {
-            const answer = answers[i];
-            const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
-            if (answer != dist) {
-                return MismatchError.DistanceMismatch;
+            for (pairs, 0..) |pair, i| {
+                const answer = answers[i];
+                const dist = referenceHaversine(pair.x0, pair.y0, pair.x1, pair.y1);
+                if (answer != dist) {
+                    return MismatchError.DistanceMismatch;
+                }
+                avg += dist;
             }
-            avg += dist;
         }
-
-        const prof_misc_output = platform.readCpuTimer();
 
         if (avg != answers[answers.len - 1]) {
             return MismatchError.AvgMismatch;
@@ -233,30 +239,12 @@ fn run() !void {
 
         try stdout.print("All values match.\n", .{});
 
-        const prof_end = platform.readCpuTimer();
-
         if (config.profile) {
-            const cpu_freq: u64 = platform.estimateCpuFreq(100);
-            const total_cpu_elapsed = prof_end - prof_begin;
+            prof.stop(pr_id1);
 
-            try stdout.print("Total time: {d:.2}ms (CPU freq {d})\n", .{ 1000.0 * @as(f64, @floatFromInt(total_cpu_elapsed)) / @as(f64, @floatFromInt(cpu_freq)), cpu_freq });
-
-            try printTimeElapsed(stdout, "Startup", total_cpu_elapsed, prof_begin, prof_misc_setup);
-
-            try printTimeElapsed(stdout, "MiscSetup", total_cpu_elapsed, prof_misc_setup, prof_read);
-            try printTimeElapsed(stdout, "Read", total_cpu_elapsed, prof_read, prof_parse);
-            try printTimeElapsed(stdout, "Parse", total_cpu_elapsed, prof_parse, prof_sum);
-            try printTimeElapsed(stdout, "Sum", total_cpu_elapsed, prof_sum, prof_misc_output);
-            try printTimeElapsed(stdout, "MiscOutput", total_cpu_elapsed, prof_misc_output, prof_end);
+            try prof.print_summary(stdout);
         }
     }
-}
-
-fn printTimeElapsed(stdout: std.fs.File.Writer, label: []const u8, total: u64, begin: u64, end: u64) !void {
-    const elapsed = (end - begin);
-    const portion = 100.0 * @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total));
-
-    try stdout.print("{s}: {d} ({d:.2}%)\n", .{ label, elapsed, portion });
 }
 
 fn writeAnswers(distances: []f64, avg: f64, binary_file_name: []const u8) !void {
@@ -279,7 +267,10 @@ fn writeAnswers(distances: []f64, avg: f64, binary_file_name: []const u8) !void 
 }
 
 // caller must dealloc array
-fn readAnswers(binary_file_name: []u8, alloc: Allocator) ![]f64 {
+fn readAnswers(binary_file_name: []u8, alloc: Allocator, prof: *Profiler) ![]f64 {
+    const pr_id = prof.start("Read");
+    defer prof.stop(pr_id);
+
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
     const data = try fs.cwd().readFileAlloc(alloc, binary_file_name, max_bytes);
     const answers: []f64 = try alloc.alloc(f64, data.len / 8);
@@ -399,24 +390,14 @@ fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
 const ParsedData = std.json.Parsed(Data);
 
 // caller must clean up data
-fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
+fn readJson(json_file_name: []const u8, alloc: Allocator, prof: *Profiler) !ParsedData {
+    const pr_id = prof.start("Parse");
+    defer prof.stop(pr_id);
+
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
     const string = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
     defer alloc.free(string);
 
     const data = try std.json.parseFromSlice(Data, alloc, string, .{});
     return data;
-}
-
-test "readOSTimer" {
-    try std.testing.expect(1 < platform.readOsTimer());
-}
-
-test "readCpuTimer" {
-    try std.testing.expect(1 < platform.readCpuTimer());
-}
-
-test "estimateCpuFreq" {
-    try std.testing.expect(24_000_000 < platform.estimateCpuFreq(1000));
-    try std.testing.expect(24_000_000 < platform.estimateCpuFreq(100));
 }
