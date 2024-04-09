@@ -150,8 +150,6 @@ fn run() !void {
     var entries: [10]ProfilerEntry = [_]ProfilerEntry{ProfilerEntry{}} ** 10;
     var prof = Profiler.init(&entries);
 
-    const pr_id1 = prof.start("Total");
-
     const stdout = std.io.getStdOut().writer();
 
     if ((config.generate == null) and (config.verify == null)) {
@@ -240,8 +238,6 @@ fn run() !void {
         try stdout.print("All values match.\n", .{});
 
         if (config.profile) {
-            prof.stop(pr_id1);
-
             try prof.print_summary(stdout);
         }
     }
