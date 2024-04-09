@@ -147,7 +147,8 @@ pub fn main() !void {
 }
 
 fn run() !void {
-    var entries: [10]ProfilerEntry = [_]ProfilerEntry{ProfilerEntry{}} ** 10;
+    const profiler_entries = 100;
+    var entries: [profiler_entries]ProfilerEntry = [_]ProfilerEntry{ProfilerEntry{}} ** profiler_entries;
     var prof = Profiler.init(&entries);
 
     const stdout = std.io.getStdOut().writer();
