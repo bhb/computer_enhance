@@ -389,12 +389,28 @@ const ParsedData = std.json.Parsed(Data);
 // caller must clean up data
 fn readJson(json_file_name: []const u8, alloc: Allocator, prof: *Profiler) !ParsedData {
     const pr_id = prof.start("Parse");
+    foo(prof, 3);
     defer prof.stop(pr_id);
 
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
+    const pr_id2 = prof.start("Read file");
     const string = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
+    prof.stop(pr_id2);
     defer alloc.free(string);
 
     const data = try std.json.parseFromSlice(Data, alloc, string, .{});
     return data;
+}
+
+fn foo(prof: *Profiler, count: u64) void {
+    if (count == 0) {
+        return;
+    }
+
+    const idx = prof.start("Foo");
+    defer prof.stop(idx);
+
+    std.time.sleep(count * 1000);
+
+    foo(prof, count - 1);
 }
