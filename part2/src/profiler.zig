@@ -10,28 +10,19 @@ pub const ProfilerBlock = struct {
     name: []const u8 = "unset",
     idx: u16 = 0,
     parent_idx: u16 = 0,
+    begin: u64 = 0,
+    old_elapsed_at_root: u64 = 0,
 };
 
 // Entries are unique per name
 pub const ProfilerEntry = struct {
     name: []const u8 = "unset",
-    begin: u64 = 0,
     hit_count: u64 = 0,
     elapsed_total: u64 = 0,
     elapsed_children: u64 = 0,
     elapsed_at_root: u64 = 0,
 
-    // pub fn elapsed(self: ProfilerEntry) u64 {
-    //     std.debug.print("elapsed: name: {s}, begin {d}, end {d}, inner_elapsed {d}\n", .{ self.name, self.begin, self.end, self.elapsed_children });
-    //     return self.end - self.begin - self.elapsed_children;
-    // }
-
-    // pub fn elapsed_with_children(self: ProfilerEntry) u64 {
-    //     return self.end - self.begin;
-    // }
-
     pub fn elapsed_self(self: ProfilerEntry) i128 {
-        //std.debug.print("elapsed_self: name: {s}, begin {d}, elapsed {d}, elapsed_children {d}\n", .{ self.name, self.begin, self.elapsed_total, self.elapsed_children });
         const total: i128 = self.elapsed_total;
         return total - self.elapsed_children;
     }
@@ -46,11 +37,10 @@ const PROFILER_ENTRIES = 1000;
 pub const Profiler = struct {
     // start at 1, so I don't need to check for parent
     entry_idx: u16 = 1,
-    idx: u16 = 0,
+    //idx: u16 = 0,
     parent_idx: u16 = 0,
     entries: [PROFILER_ENTRIES]ProfilerEntry,
     begin: u64 = 0, // We are counting via the timer, so after the machine boots, it will never be zero
-    old_elapsed_at_root: u64 = 0,
 
     pub fn init() Profiler {
         return Profiler{ .entries = [_]ProfilerEntry{.{ .name = "unset" }} ** PROFILER_ENTRIES };
@@ -77,16 +67,16 @@ pub const Profiler = struct {
 
         if (!existingEntry) {
             self.entry_idx += 1;
-            entry.begin = platform.readCpuTimer();
             entry.name = name;
         }
 
         // Handle recursive entries, see
         // https://www.computerenhance.com/p/profiling-recursive-blocks
-        self.old_elapsed_at_root = entry.elapsed_at_root;
+        const old_elapsed_at_root = entry.elapsed_at_root;
 
         // Create a block and return it
-        const block = ProfilerBlock{ .name = name, .idx = entry_idx, .parent_idx = self.parent_idx };
+        const now = platform.readCpuTimer();
+        const block = ProfilerBlock{ .name = name, .idx = entry_idx, .parent_idx = self.parent_idx, .begin = now, .old_elapsed_at_root = old_elapsed_at_root };
 
         self.parent_idx = entry_idx;
 
@@ -98,30 +88,23 @@ pub const Profiler = struct {
 
         var entry: *ProfilerEntry = &self.entries[block.idx];
 
-        const elapsed = platform.readCpuTimer() - entry.begin;
-        const temp_elapsed = entry.elapsed_total;
-        _ = temp_elapsed;
+        const elapsed = platform.readCpuTimer() - block.begin;
         entry.elapsed_total += elapsed;
 
         // Handle recursive entries, see
         // https://www.computerenhance.com/p/profiling-recursive-blocks
-        entry.elapsed_at_root = self.old_elapsed_at_root + elapsed;
+        entry.elapsed_at_root = block.old_elapsed_at_root + elapsed;
         entry.hit_count += 1;
 
         var parent = &self.entries[block.parent_idx];
 
-        const temp_parent_elapsed = parent.elapsed_children;
-        _ = temp_parent_elapsed;
         parent.elapsed_children += elapsed;
-
-        //std.debug.print("for parent {s}, [begin {d}], adding elapsed_children {d}. was {d}, now {d}\n", .{ parent.name, parent.begin, elapsed, temp_parent_elapsed, parent.elapsed_children });
     }
 
     fn print_entry(entry: *const ProfilerEntry, stdout: std.fs.File.Writer, total: u64) !void {
         const elapsed_self = entry.elapsed_self();
         const percent = 100.0 * @as(f64, @floatFromInt(elapsed_self)) / @as(f64, @floatFromInt(total));
 
-        //std.debug.print("[debug] {s}: elapsed_at_root {d}, elapsed_self: {d}.... total time {d} \n", .{ entry.name, entry.elapsed_at_root, elapsed_self, total });
         try stdout.print("{s}[{d}]: {d} ({d:.2}%", .{ entry.name, entry.hit_count, elapsed_self, percent });
         if (entry.elapsed_at_root != elapsed_self) {
             const percent_with_children = 100.0 * @as(f64, @floatFromInt(entry.elapsed_at_root)) / @as(f64, @floatFromInt(total));
@@ -148,11 +131,8 @@ pub const Profiler = struct {
 };
 
 test "profilers" {
-    const profiler_entries = 100;
-
     {
-        var entries: [profiler_entries]ProfilerEntry = [_]ProfilerEntry{.{ .name = "unset" }} ** profiler_entries;
-        var prof = Profiler.init(&entries);
+        var prof = Profiler.init();
 
         const bl = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
@@ -181,15 +161,14 @@ test "profilers" {
     // Reusing same method
 
     {
-        var entries: [profiler_entries]ProfilerEntry = [_]ProfilerEntry{.{ .name = "unset" }} ** profiler_entries;
-        var prof = Profiler.init(&entries);
+        var prof = Profiler.init();
 
         const bl = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         std.time.sleep(1000);
         prof.stop(bl);
 
-        try std.testing.expect(0 < prof.entries[1].begin);
+        try std.testing.expect(0 < bl.begin);
         try std.testing.expect(0 < prof.entries[1].elapsed_total);
         const old_elapsed = prof.entries[1].elapsed_total;
 
@@ -204,13 +183,13 @@ test "profilers" {
 
     // Child method
     {
-        var entries: [profiler_entries]ProfilerEntry = [_]ProfilerEntry{.{ .name = "unset" }} ** profiler_entries;
-        var prof = Profiler.init(&entries);
+        var prof = Profiler.init();
 
         const bl = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         const bl2 = prof.prof("Bar");
         try std.testing.expectEqual(2, prof.parent_idx);
+        std.time.sleep(1000);
         prof.stop(bl2);
         prof.stop(bl);
 
@@ -226,12 +205,12 @@ test "profilers" {
 
     // Self recursion
     {
-        var entries: [profiler_entries]ProfilerEntry = [_]ProfilerEntry{.{ .name = "unset" }} ** profiler_entries;
-        var prof = Profiler.init(&entries);
+        var prof = Profiler.init();
 
         const blk = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         const blk2 = prof.prof("Foo");
+        std.time.sleep(1000);
         try std.testing.expectEqual(1, prof.parent_idx);
         prof.stop(blk2);
         try std.testing.expectEqual(1, prof.parent_idx);
@@ -248,15 +227,16 @@ test "profilers" {
 
     // Mutual recursion
     {
-        var entries: [profiler_entries]ProfilerEntry = [_]ProfilerEntry{.{ .name = "unset" }} ** profiler_entries;
-        var prof = Profiler.init(&entries);
+        var prof = Profiler.init();
 
         const blk = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         const blk2 = prof.prof("Bar");
+        std.time.sleep(1000);
         try std.testing.expectEqual(2, prof.parent_idx);
 
         const blk3 = prof.prof("Foo");
+        std.time.sleep(1000);
         try std.testing.expectEqual(1, prof.parent_idx);
         prof.stop(blk3);
 
@@ -274,7 +254,7 @@ test "profilers" {
         try std.testing.expect(0 < entry2.elapsed_children);
 
         try std.testing.expect(0 < entry1.elapsed_self());
-        try std.testing.expect(entry2.elapsed_self() < 0);
+        try std.testing.expect(0 < entry2.elapsed_self());
     }
 }
 
