@@ -158,7 +158,7 @@ fn run() !void {
         return;
     }
 
-    //const pr_id2 = prof.prof("Misc Setup");
+    const pr_id2 = prof.prof("Misc Setup");
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
@@ -166,7 +166,7 @@ fn run() !void {
     const binary_file_name = try std.fmt.allocPrint(alloc, "{?s}.f64", .{config.generate orelse config.verify});
     const json_file_name = try std.fmt.allocPrint(alloc, "{?s}.json", .{config.generate orelse config.verify});
 
-    //prof.stop(pr_id2);
+    prof.stop(pr_id2);
 
     if (config.generate != null) {
         var prng = std.rand.DefaultPrng.init(config.seed);
@@ -219,8 +219,8 @@ fn run() !void {
         var avg: f64 = 0;
 
         {
-            //const pr_id = prof.prof("Sum");
-            //defer prof.stop(pr_id);
+            const pr_id = prof.prof("Sum");
+            defer prof.stop(pr_id);
 
             for (pairs, 0..) |pair, i| {
                 const answer = answers[i];
@@ -265,9 +265,8 @@ fn writeAnswers(distances: []f64, avg: f64, binary_file_name: []const u8) !void 
 
 // caller must dealloc array
 fn readAnswers(binary_file_name: []u8, alloc: Allocator, prof: *Profiler) ![]f64 {
-    _ = prof;
-    //const pr_id = prof.prof("Read");
-    //defer prof.stop(pr_id);
+    const pr_id = prof.prof("Read");
+    defer prof.stop(pr_id);
 
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
     const data = try fs.cwd().readFileAlloc(alloc, binary_file_name, max_bytes);
@@ -389,58 +388,15 @@ const ParsedData = std.json.Parsed(Data);
 
 // caller must clean up data
 fn readJson(json_file_name: []const u8, alloc: Allocator, prof: *Profiler) !ParsedData {
-    //const pr_id7 = prof.prof("Baz");
-    //prof.stop(pr_id7);
-
-    // Testing the profiler
-    //const pr_id8 = prof.prof("Foo1");
-
-    //const pr_id9 = prof.prof("Bar");
-    //std.time.sleep(1000000);
-
-    //const pr_id91 = prof.prof("Bar");
-    //std.time.sleep(1000000);
-    //prof.stop(pr_id91);
-
-    foo1(prof, 3);
-    //prof.stop(pr_id9);
-    //prof.stop(pr_id8);
-
-    //const pr_id = prof.prof("Parse");
-    //defer prof.stop(pr_id);
+    const pr_id = prof.prof("Parse");
+    defer prof.stop(pr_id);
 
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
-    //const pr_id2 = prof.prof("Read file");
+    const pr_id2 = prof.prof("Read file");
     const string = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
-    //prof.stop(pr_id2);
+    prof.stop(pr_id2);
     defer alloc.free(string);
 
     const data = try std.json.parseFromSlice(Data, alloc, string, .{});
     return data;
-}
-
-fn foo1(prof: *Profiler, count: u64) void {
-    if (count == 0) {
-        return;
-    }
-
-    const idx = prof.prof("Foo1");
-    defer prof.stop(idx);
-
-    std.time.sleep(count * 1000000);
-
-    foo2(prof, count - 1);
-}
-
-fn foo2(prof: *Profiler, count: u64) void {
-    if (count == 0) {
-        return;
-    }
-
-    const idx = prof.prof("Foo2");
-    defer prof.stop(idx);
-
-    std.time.sleep(count * 1000000);
-
-    foo1(prof, count - 1);
 }

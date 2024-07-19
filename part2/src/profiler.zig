@@ -4,8 +4,8 @@
 const std = @import("std");
 const platform = @import("./platform.zig");
 
-// A block of code that is going to be profiled
-// many blocks can point to the same entry
+// A block of code that is going to be profiled.
+// (Many blocks can point to the same entry)
 pub const ProfilerBlock = struct {
     name: []const u8 = "unset",
     idx: u16 = 0,
@@ -37,7 +37,6 @@ const PROFILER_ENTRIES = 1000;
 pub const Profiler = struct {
     // start at 1, so I don't need to check for parent
     entry_idx: u16 = 1,
-    //idx: u16 = 0,
     parent_idx: u16 = 0,
     entries: [PROFILER_ENTRIES]ProfilerEntry,
     begin: u64 = 0, // We are counting via the timer, so after the machine boots, it will never be zero
