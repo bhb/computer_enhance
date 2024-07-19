@@ -34,22 +34,22 @@ pub const ProfilerEntry = struct {
 
 const PROFILER_ENTRIES = 1000;
 
-pub const Profiler = struct {
+pub const EnabledProfiler = struct {
     // start at 1, so I don't need to check for parent
     entry_idx: u16 = 1,
     parent_idx: u16 = 0,
     entries: [PROFILER_ENTRIES]ProfilerEntry,
     begin: u64 = 0, // We are counting via the timer, so after the machine boots, it will never be zero
 
-    pub fn init() Profiler {
-        return Profiler{ .entries = [_]ProfilerEntry{.{ .name = "unset" }} ** PROFILER_ENTRIES };
+    pub fn init() EnabledProfiler {
+        return EnabledProfiler{ .entries = [_]ProfilerEntry{.{}} ** PROFILER_ENTRIES };
     }
 
-    pub fn start(self: *Profiler) void {
+    pub fn start(self: *EnabledProfiler) void {
         self.begin = platform.readCpuTimer();
     }
 
-    pub fn prof(self: *Profiler, name: []const u8) ProfilerBlock {
+    pub fn prof(self: *EnabledProfiler, name: []const u8) ProfilerBlock {
         // Find the entry
         var entry_idx = self.entry_idx;
         var existingEntry = false;
@@ -82,7 +82,7 @@ pub const Profiler = struct {
         return block;
     }
 
-    pub fn stop(self: *Profiler, block: ProfilerBlock) void {
+    pub fn stop(self: *EnabledProfiler, block: ProfilerBlock) void {
         self.parent_idx = block.parent_idx;
 
         var entry: *ProfilerEntry = &self.entries[block.idx];
@@ -113,7 +113,7 @@ pub const Profiler = struct {
         }
     }
 
-    pub fn print_summary(self: *Profiler, stdout: std.fs.File.Writer) !void {
+    pub fn print_summary(self: *EnabledProfiler, stdout: std.fs.File.Writer) !void {
         const end = platform.readCpuTimer();
 
         const cpu_freq: u64 = platform.estimateCpuFreq(100);
@@ -129,9 +129,64 @@ pub const Profiler = struct {
     }
 };
 
+const DisabledProfiler = struct {
+    begin: u64 = 0, // We are counting via the timer, so after the machine boots, it will never be zero
+
+    pub fn init() DisabledProfiler {
+        return DisabledProfiler{};
+    }
+
+    pub fn start(self: *DisabledProfiler) void {
+        self.begin = platform.readCpuTimer();
+    }
+
+    pub fn prof(self: *DisabledProfiler, name: []const u8) ProfilerBlock {
+        _ = name;
+        _ = self;
+        // No-op implementation
+        return ProfilerBlock{};
+    }
+
+    pub fn stop(self: *DisabledProfiler, block: ProfilerBlock) void {
+        _ = block;
+        _ = self;
+        // No-op implementation
+    }
+
+    pub fn print_summary(self: *DisabledProfiler, stdout: std.fs.File.Writer) !void {
+        const end = platform.readCpuTimer();
+
+        const cpu_freq: u64 = platform.estimateCpuFreq(100);
+        const total = end - self.begin;
+
+        try stdout.print("Total time: {d:.2}ms (CPU freq {d})\n", .{ 1000.0 * @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(cpu_freq)), cpu_freq });
+    }
+};
+
+pub fn Profiler(comptime enabled: bool) type {
+    return if (comptime enabled) EnabledProfiler else DisabledProfiler;
+}
+
+test "disabled profiler" {
+    var prof = Profiler(false).init();
+    prof.start();
+
+    const bl = prof.prof("Foo");
+    prof.stop(bl);
+
+    // check block
+    try std.testing.expectEqual(0, bl.idx);
+    try std.testing.expectEqual(0, bl.parent_idx);
+    try std.testing.expectEqual("unset", bl.name);
+
+    const stdout = std.io.getStdOut().writer();
+    try prof.print_summary(stdout);
+}
+
 test "profilers" {
     {
-        var prof = Profiler.init();
+        var prof = Profiler(true).init();
+        prof.start();
 
         const bl = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
@@ -160,7 +215,7 @@ test "profilers" {
     // Reusing same method
 
     {
-        var prof = Profiler.init();
+        var prof = Profiler(true).init();
 
         const bl = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
@@ -182,7 +237,7 @@ test "profilers" {
 
     // Child method
     {
-        var prof = Profiler.init();
+        var prof = Profiler(true).init();
 
         const bl = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
@@ -204,7 +259,7 @@ test "profilers" {
 
     // Self recursion
     {
-        var prof = Profiler.init();
+        var prof = Profiler(true).init();
 
         const blk = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
@@ -226,7 +281,7 @@ test "profilers" {
 
     // Mutual recursion
     {
-        var prof = Profiler.init();
+        var prof = Profiler(true).init();
 
         const blk = prof.prof("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);

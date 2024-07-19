@@ -3,8 +3,6 @@ const fs = std.fs;
 const cli = @import("zig-cli");
 const profiler = @import("./profiler.zig");
 const Profiler = profiler.Profiler;
-const ProfilerEntry = profiler.ProfilerEntry;
-const ProfilerBlock = profiler.ProfilerBlock;
 
 const math = std.math;
 const MismatchError = error{ DistanceMismatch, AvgMismatch };
@@ -14,6 +12,9 @@ fn square(x: f64) f64 {
 }
 
 const earth_radius = 6371;
+
+const profiler_enabled = true;
+var prof = Profiler(profiler_enabled).init();
 
 fn referenceHaversine(x0: f64, y0: f64, x1: f64, y1: f64) f64 {
     var lat1: f64 = y0;
@@ -148,7 +149,6 @@ pub fn main() !void {
 }
 
 fn run() !void {
-    var prof = Profiler.init();
     prof.start();
 
     const stdout = std.io.getStdOut().writer();
@@ -208,10 +208,10 @@ fn run() !void {
         try stdout.print("Pair count: {d}\n", .{config.count});
         try stdout.print("Expected average: {d}\n", .{avg});
     } else if (config.verify != null) {
-        const answers: []f64 = try readAnswers(binary_file_name, alloc, &prof);
+        const answers: []f64 = try readAnswers(binary_file_name, alloc);
         defer alloc.free(answers);
 
-        const data: ParsedData = try readJson(json_file_name, alloc, &prof);
+        const data: ParsedData = try readJson(json_file_name, alloc);
         defer data.deinit();
 
         const pairs = data.value.pairs;
@@ -264,7 +264,7 @@ fn writeAnswers(distances: []f64, avg: f64, binary_file_name: []const u8) !void 
 }
 
 // caller must dealloc array
-fn readAnswers(binary_file_name: []u8, alloc: Allocator, prof: *Profiler) ![]f64 {
+fn readAnswers(binary_file_name: []u8, alloc: Allocator) ![]f64 {
     const pr_id = prof.prof("Read");
     defer prof.stop(pr_id);
 
@@ -387,7 +387,7 @@ fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
 const ParsedData = std.json.Parsed(Data);
 
 // caller must clean up data
-fn readJson(json_file_name: []const u8, alloc: Allocator, prof: *Profiler) !ParsedData {
+fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
     const pr_id = prof.prof("Parse");
     defer prof.stop(pr_id);
 
