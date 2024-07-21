@@ -21,6 +21,7 @@ pub const ProfilerEntry = struct {
     elapsed_total: u64 = 0,
     elapsed_children: u64 = 0,
     elapsed_at_root: u64 = 0,
+    processed_bytes: u64 = 0,
 
     pub fn elapsed_self(self: ProfilerEntry) i128 {
         const total: i128 = self.elapsed_total;
@@ -49,7 +50,11 @@ pub const EnabledProfiler = struct {
         self.begin = platform.readCpuTimer();
     }
 
-    pub fn prof(self: *EnabledProfiler, name: []const u8) ProfilerBlock {
+    pub fn time_block(self: *EnabledProfiler, name: []const u8) ProfilerBlock {
+        return time_throughput(self, name, 0);
+    }
+
+    pub fn time_throughput(self: *EnabledProfiler, name: []const u8, bytes: u64) ProfilerBlock {
         // Find the entry
         var entry_idx = self.entry_idx;
         var existingEntry = false;
@@ -68,6 +73,8 @@ pub const EnabledProfiler = struct {
             self.entry_idx += 1;
             entry.name = name;
         }
+
+        entry.processed_bytes += bytes;
 
         // Handle recursive entries, see
         // https://www.computerenhance.com/p/profiling-recursive-blocks
@@ -100,17 +107,32 @@ pub const EnabledProfiler = struct {
         parent.elapsed_children += elapsed;
     }
 
-    fn print_entry(entry: *const ProfilerEntry, stdout: std.fs.File.Writer, total: u64) !void {
+    fn print_entry(entry: *const ProfilerEntry, stdout: std.fs.File.Writer, total: u64, cpu_freq: u64) !void {
         const elapsed_self = entry.elapsed_self();
         const percent = 100.0 * @as(f64, @floatFromInt(elapsed_self)) / @as(f64, @floatFromInt(total));
 
         try stdout.print("{s}[{d}]: {d} ({d:.2}%", .{ entry.name, entry.hit_count, elapsed_self, percent });
         if (entry.elapsed_at_root != elapsed_self) {
             const percent_with_children = 100.0 * @as(f64, @floatFromInt(entry.elapsed_at_root)) / @as(f64, @floatFromInt(total));
-            try stdout.print(", {d:.2}% w/ children)\n", .{percent_with_children});
+            try stdout.print(", {d:.2}% w/ children)", .{percent_with_children});
         } else {
-            try stdout.print(")\n", .{});
+            try stdout.print(")", .{});
         }
+
+        if (entry.processed_bytes > 0) {
+            const mb = 1024.0 * 1024.0;
+            const gb = mb * 1024.0;
+
+            const seconds = @as(f64, @floatFromInt(entry.elapsed_total)) / @as(f64, @floatFromInt(cpu_freq));
+
+            const bytes_per_second = @as(f64, @floatFromInt(entry.processed_bytes)) / seconds;
+            const mbs = @as(f64, @floatFromInt(entry.processed_bytes)) / mb;
+            const gb_per_s = bytes_per_second / gb;
+
+            try stdout.print(" {d:.2}mb at {d:.2}gb/s", .{ mbs, gb_per_s });
+        }
+
+        try stdout.print("\n", .{});
     }
 
     pub fn print_summary(self: *EnabledProfiler, stdout: std.fs.File.Writer) !void {
@@ -124,7 +146,7 @@ pub const EnabledProfiler = struct {
         // first entry is empty
         for (1..self.entry_idx) |idx| {
             const entry = self.entries[idx];
-            try print_entry(&entry, stdout, total);
+            try print_entry(&entry, stdout, total, cpu_freq);
         }
     }
 };
@@ -140,7 +162,12 @@ const DisabledProfiler = struct {
         self.begin = platform.readCpuTimer();
     }
 
-    pub fn prof(self: *DisabledProfiler, name: []const u8) ProfilerBlock {
+    pub fn time_block(self: *DisabledProfiler, name: []const u8) ProfilerBlock {
+        return self.time_throughput(name, 0);
+    }
+
+    pub fn time_throughput(self: *DisabledProfiler, name: []const u8, bytes: u64) ProfilerBlock {
+        _ = bytes;
         _ = name;
         _ = self;
         // No-op implementation
@@ -171,7 +198,7 @@ test "disabled profiler" {
     var prof = Profiler(false).init();
     prof.start();
 
-    const bl = prof.prof("Foo");
+    const bl = prof.time_block("Foo");
     prof.stop(bl);
 
     // check block
@@ -179,8 +206,11 @@ test "disabled profiler" {
     try std.testing.expectEqual(0, bl.parent_idx);
     try std.testing.expectEqual("unset", bl.name);
 
-    const stdout = std.io.getStdOut().writer();
-    try prof.print_summary(stdout);
+    const bl2 = prof.time_throughput("Foo", 10);
+    prof.stop(bl2);
+
+    //const stdout = std.io.getStdOut().writer();
+    //try prof.print_summary(stdout);
 }
 
 test "profilers" {
@@ -188,7 +218,7 @@ test "profilers" {
         var prof = Profiler(true).init();
         prof.start();
 
-        const bl = prof.prof("Foo");
+        const bl = prof.time_block("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         prof.stop(bl);
 
@@ -217,7 +247,7 @@ test "profilers" {
     {
         var prof = Profiler(true).init();
 
-        const bl = prof.prof("Foo");
+        const bl = prof.time_block("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         std.time.sleep(1000);
         prof.stop(bl);
@@ -226,7 +256,7 @@ test "profilers" {
         try std.testing.expect(0 < prof.entries[1].elapsed_total);
         const old_elapsed = prof.entries[1].elapsed_total;
 
-        const bl2 = prof.prof("Foo");
+        const bl2 = prof.time_block("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
         prof.stop(bl2);
 
@@ -239,9 +269,9 @@ test "profilers" {
     {
         var prof = Profiler(true).init();
 
-        const bl = prof.prof("Foo");
+        const bl = prof.time_block("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
-        const bl2 = prof.prof("Bar");
+        const bl2 = prof.time_block("Bar");
         try std.testing.expectEqual(2, prof.parent_idx);
         std.time.sleep(1000);
         prof.stop(bl2);
@@ -261,9 +291,9 @@ test "profilers" {
     {
         var prof = Profiler(true).init();
 
-        const blk = prof.prof("Foo");
+        const blk = prof.time_block("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
-        const blk2 = prof.prof("Foo");
+        const blk2 = prof.time_block("Foo");
         std.time.sleep(1000);
         try std.testing.expectEqual(1, prof.parent_idx);
         prof.stop(blk2);
@@ -283,13 +313,13 @@ test "profilers" {
     {
         var prof = Profiler(true).init();
 
-        const blk = prof.prof("Foo");
+        const blk = prof.time_block("Foo");
         try std.testing.expectEqual(1, prof.parent_idx);
-        const blk2 = prof.prof("Bar");
+        const blk2 = prof.time_block("Bar");
         std.time.sleep(1000);
         try std.testing.expectEqual(2, prof.parent_idx);
 
-        const blk3 = prof.prof("Foo");
+        const blk3 = prof.time_block("Foo");
         std.time.sleep(1000);
         try std.testing.expectEqual(1, prof.parent_idx);
         prof.stop(blk3);
@@ -318,6 +348,20 @@ test "readOSTimer" {
 
 test "readCpuTimer" {
     try std.testing.expect(1 < platform.readCpuTimer());
+}
+
+test "time_bandwidth" {
+    var prof = Profiler(true).init();
+
+    const blk = prof.time_bandwidth("Foo", 10);
+    prof.stop(blk);
+
+    const entry1 = prof.entries[1];
+
+    try std.testing.expectEqual(10, entry1.processed_bytes);
+
+    //const stdout = std.io.getStdOut().writer();
+    //try prof.print_summary(stdout);
 }
 
 test "estimateCpuFreq" {
