@@ -1,8 +1,11 @@
 const std = @import("std");
-const fs = std.fs;
 const cli = @import("zig-cli");
 const profiler = @import("./profiler.zig");
+const repitition_tester = @import("./repetition_tester.zig");
+
+const fs = std.fs;
 const Profiler = profiler.Profiler;
+const RepetitionTester = repitition_tester.RepetitionTester;
 
 const math = std.math;
 const MismatchError = error{ DistanceMismatch, AvgMismatch };
@@ -15,6 +18,7 @@ const earth_radius = 6371;
 
 const profiler_enabled = true;
 var prof = Profiler(profiler_enabled).init();
+var tester = RepetitionTester.init();
 
 fn referenceHaversine(x0: f64, y0: f64, x1: f64, y1: f64) f64 {
     var lat1: f64 = y0;
@@ -400,7 +404,10 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
 
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
     const pr_id2 = prof.time_throughput("Read file", file_size);
+
+    _ = tester.is_testing();
     const string: []u8 = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
+
     prof.stop(pr_id2);
     defer alloc.free(string);
 
