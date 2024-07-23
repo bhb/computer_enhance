@@ -353,7 +353,7 @@ test "readCpuTimer" {
 test "time_bandwidth" {
     var prof = Profiler(true).init();
 
-    const blk = prof.time_bandwidth("Foo", 10);
+    const blk = prof.time_throughput("Foo", 10);
     prof.stop(blk);
 
     const entry1 = prof.entries[1];

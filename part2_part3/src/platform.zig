@@ -18,7 +18,7 @@ pub fn readOsTimer() u64 {
     return OsTimerFreq * @as(u64, @bitCast(value.tv_sec)) + @as(u32, @bitCast(value.tv_usec));
 }
 
-// Might need antoher instruction to figure out timer frequency?
+// Might need another instruction to figure out timer frequency?
 // https://cpufun.substack.com/i/32886352/aarch-timer
 
 pub fn readCpuFreq() u64 {
