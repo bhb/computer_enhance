@@ -2,6 +2,8 @@ const std = @import("std");
 const platform = @import("./platform.zig");
 const test_allocator = std.testing.allocator;
 
+// Usage: see tests
+
 // state which is enum with values uninitialized, testing, completed, and error
 const Mode = enum {
     Uninitialized,
@@ -22,7 +24,7 @@ pub const RepetitionTester = struct {
     cpu_freq: u64 = 0,
     mode: Mode = Mode.Uninitialized,
     open_block_count: u64 = 0,
-    print_new_minimums: bool = false,
+    print_new_minimums: bool = true,
     results: TestResults = TestResults{},
     target_processed_byte_count: u64 = 0,
     tests_started_at: u64 = 0,
@@ -40,7 +42,6 @@ pub const RepetitionTester = struct {
             self.mode = Mode.Testing;
             self.target_processed_byte_count = target_processed_byte_count;
             self.cpu_freq = cpu_freq;
-            self.print_new_minimums = true;
             self.results.min_time = std.math.maxInt(u64) - 1;
         } else if (self.mode == Mode.Completed) {
             self.mode = Mode.Testing;
@@ -63,13 +64,15 @@ pub const RepetitionTester = struct {
 
         if (cpu_freq) |cpu_freq_v| {
             const seconds: f64 = @as(f64, @floatFromInt(cpu_time)) / @as(f64, @floatFromInt(cpu_freq_v));
-            try stdout.print("({d}ms)", .{1000 * seconds});
+            try stdout.print(" ({d:0.2}ms)", .{1000 * seconds});
 
             if (byte_count) |v| {
                 const gigabyte = 1024.0 * 1024.0 * 1024.0;
                 const best_bandwidth = @as(f64, @floatFromInt(v)) / (gigabyte * seconds);
-                try stdout.print(" {d}gb/s", .{best_bandwidth});
+                try stdout.print(" {d:.2} gb/s", .{best_bandwidth});
             }
+
+            try stdout.print("\r", .{});
         }
     }
 
@@ -93,8 +96,14 @@ pub const RepetitionTester = struct {
     }
 
     pub fn print_results(self: *RepetitionTester, stdout: anytype) !void {
-        _ = self;
         try stdout.print("\n", .{});
+        try self.print_time(stdout, "Min", self.results.min_time, self.cpu_freq, self.target_processed_byte_count);
+        try self.print_time(stdout, "Max", self.results.max_time, self.cpu_freq, self.target_processed_byte_count);
+        try stdout.print("\n", .{});
+        if (self.results.test_count > 0) {
+            try self.print_time(stdout, "Avg", self.results.total_time / self.results.test_count, self.cpu_freq, self.target_processed_byte_count);
+            try stdout.print("\n", .{});
+        }
     }
 
     pub fn is_testing(self: *RepetitionTester, stdout: anytype) !bool {
@@ -107,7 +116,9 @@ pub const RepetitionTester = struct {
                 }
 
                 if (self.target_processed_byte_count != self.bytes_accumulated_on_this_test) {
-                    try self.err(stdout, "Processed byte count mismatch");
+                    var buffer: [100]u8 = undefined;
+                    const msg = try std.fmt.bufPrint(&buffer, "Processed byte count mismatch. Expected {d}, got {d}", .{ self.target_processed_byte_count, self.bytes_accumulated_on_this_test });
+                    try self.err(stdout, msg);
                 }
 
                 if (self.mode == Mode.Testing) {
@@ -308,7 +319,7 @@ test "getting result from repetition tester" {
         std.time.sleep(rough_ns * i);
         tester.stop();
 
-        tester.count_bytes(10);
+        tester.count_bytes(byte_count);
     }
 
     // Each wait is roughly 1/3 of a second and we wait a second

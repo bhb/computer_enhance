@@ -2,6 +2,7 @@ const std = @import("std");
 const cli = @import("zig-cli");
 const profiler = @import("./profiler.zig");
 const repitition_tester = @import("./repetition_tester.zig");
+const platform = @import("./platform.zig");
 
 const fs = std.fs;
 const Profiler = profiler.Profiler;
@@ -18,7 +19,6 @@ const earth_radius = 6371;
 
 const profiler_enabled = true;
 var prof = Profiler(profiler_enabled).init();
-var tester = RepetitionTester.init();
 
 fn referenceHaversine(x0: f64, y0: f64, x1: f64, y1: f64) f64 {
     var lat1: f64 = y0;
@@ -394,26 +394,75 @@ const ParsedData = std.json.Parsed(Data);
 fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
     const pr_id1 = prof.time_block("Read file size");
 
-    const file = try std.fs.cwd().openFile(json_file_name, .{});
-    defer file.close();
+    const file_size = blk: {
+        const file = try std.fs.cwd().openFile(json_file_name, .{});
+        defer file.close();
 
-    const stat = try file.stat();
-    const file_size = stat.size;
+        const stat = try file.stat();
+        break :blk stat.size;
+    };
 
     prof.stop(pr_id1);
 
     const max_bytes = 1 * 1024 * 1024 * 1024; // 1 GB limit
     const pr_id2 = prof.time_throughput("Read file", file_size);
 
-    _ = tester.is_testing();
-    const string: []u8 = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
+    const info = try fs.cwd().statFile(json_file_name);
 
-    prof.stop(pr_id2);
-    defer alloc.free(string);
+    const stdout = std.io.getStdOut().writer();
+    const cpu_freq = platform.estimateCpuFreq(1000);
+    const seconds_to_wait = 5;
 
-    const pr_id3 = prof.time_throughput("Parse", string.len);
-    defer prof.stop(pr_id3);
+    var tester: RepetitionTester = undefined;
 
-    const data = try std.json.parseFromSlice(Data, alloc, string, .{});
-    return data;
+    try stdout.print("-----------readAllAlloc\n", .{});
+    tester = RepetitionTester.init();
+    try tester.new_test_wave(info.size, cpu_freq, seconds_to_wait, stdout);
+
+    while (try tester.is_testing(stdout)) {
+        tester.start();
+
+        // ################################
+        const file2 = try std.fs.cwd().openFile(json_file_name, .{});
+        defer file2.close();
+        const string = try file2.reader().readAllAlloc(alloc, max_bytes);
+
+        // ################################
+
+        tester.stop();
+        tester.count_bytes(string.len);
+
+        prof.stop(pr_id2);
+        defer alloc.free(string);
+
+        const pr_id3 = prof.time_throughput("Parse", string.len);
+        defer prof.stop(pr_id3);
+    }
+
+    try stdout.print("-----------readFileAlloc\n", .{});
+    tester = RepetitionTester.init();
+    try tester.new_test_wave(info.size, cpu_freq, seconds_to_wait, stdout);
+
+    while (try tester.is_testing(stdout)) {
+        tester.start();
+
+        // ################################
+        const string: []u8 = try fs.cwd().readFileAlloc(alloc, json_file_name, max_bytes);
+        // ################################
+
+        tester.stop();
+        tester.count_bytes(string.len);
+
+        prof.stop(pr_id2);
+        defer alloc.free(string);
+
+        const pr_id3 = prof.time_throughput("Parse", string.len);
+        defer prof.stop(pr_id3);
+    }
+
+    // TODO - remove
+    return error.DistanceMismatch;
+
+    //const data = try std.json.parseFromSlice(Data, alloc, string, .{});
+    //return data;
 }
