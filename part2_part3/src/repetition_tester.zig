@@ -17,6 +17,9 @@ pub const TestResults = struct {
     total_time: u64 = 0,
     max_time: u64 = 0,
     min_time: u64 = std.math.maxInt(u64) - 1,
+    max_time_page_faults: u64 = 0,
+    min_time_page_faults: u64 = 0,
+    total_page_faults: u64 = 0,
 };
 
 pub const RepetitionTester = struct {
@@ -30,6 +33,8 @@ pub const RepetitionTester = struct {
     tests_started_at: u64 = 0,
     try_for_time: u64 = 0,
     start_time: u64 = 0,
+    start_page_faults: u64 = 0,
+    page_faults_accumulated_on_this_test: u64 = 0,
     time_accumulated_on_this_test: u64 = 0,
     bytes_accumulated_on_this_test: u64 = 0,
 
@@ -58,7 +63,7 @@ pub const RepetitionTester = struct {
         self.tests_started_at = platform.readCpuTimer();
     }
 
-    fn print_time(self: *RepetitionTester, stdout: anytype, label: []const u8, cpu_time: u64, cpu_freq: ?u64, byte_count: ?u64) !void {
+    fn print_time(self: *RepetitionTester, stdout: anytype, label: []const u8, cpu_time: u64, cpu_freq: ?u64, byte_count: ?u64, page_faults: ?u64) !void {
         _ = self;
         try stdout.print("{s}: {d:.2}", .{ label, cpu_time });
 
@@ -66,10 +71,15 @@ pub const RepetitionTester = struct {
             const seconds: f64 = @as(f64, @floatFromInt(cpu_time)) / @as(f64, @floatFromInt(cpu_freq_v));
             try stdout.print(" ({d:0.2}ms)", .{1000 * seconds});
 
-            if (byte_count) |v| {
+            if (byte_count) |bc| {
                 const gigabyte = 1024.0 * 1024.0 * 1024.0;
-                const best_bandwidth = @as(f64, @floatFromInt(v)) / (gigabyte * seconds);
+                const best_bandwidth = @as(f64, @floatFromInt(bc)) / (gigabyte * seconds);
                 try stdout.print(" {d:.2} gb/s", .{best_bandwidth});
+
+                if (page_faults) |pf| {
+                    const kb_per_fault = (@as(f64, @floatFromInt(bc)) / 1024.0) / @as(f64, @floatFromInt(pf));
+                    try stdout.print(" PF: {d} ({d:.2}k/fault)", .{ pf, kb_per_fault });
+                }
             }
 
             try stdout.print("\r", .{});
@@ -79,11 +89,13 @@ pub const RepetitionTester = struct {
     pub fn start(self: *RepetitionTester) void {
         self.open_block_count += 1;
         self.start_time = platform.readCpuTimer();
+        self.start_page_faults = platform.pageFaults();
     }
 
     pub fn stop(self: *RepetitionTester) void {
         self.close_block_count += 1;
-        self.time_accumulated_on_this_test += platform.readCpuTimer() - self.start_time;
+        self.time_accumulated_on_this_test = platform.readCpuTimer() - self.start_time;
+        self.page_faults_accumulated_on_this_test = platform.pageFaults() - self.start_page_faults;
     }
 
     pub fn err(self: *RepetitionTester, stdout: anytype, message: []const u8) !void {
@@ -97,11 +109,11 @@ pub const RepetitionTester = struct {
 
     pub fn print_results(self: *RepetitionTester, stdout: anytype) !void {
         try stdout.print("\n", .{});
-        try self.print_time(stdout, "Min", self.results.min_time, self.cpu_freq, self.target_processed_byte_count);
-        try self.print_time(stdout, "Max", self.results.max_time, self.cpu_freq, self.target_processed_byte_count);
+        try self.print_time(stdout, "Min", self.results.min_time, self.cpu_freq, self.target_processed_byte_count, self.results.min_time_page_faults);
+        try self.print_time(stdout, "Max", self.results.max_time, self.cpu_freq, self.target_processed_byte_count, self.results.max_time_page_faults);
         try stdout.print("\n", .{});
         if (self.results.test_count > 0) {
-            try self.print_time(stdout, "Avg", self.results.total_time / self.results.test_count, self.cpu_freq, self.target_processed_byte_count);
+            try self.print_time(stdout, "Avg", self.results.total_time / self.results.test_count, self.cpu_freq, self.target_processed_byte_count, self.results.total_page_faults / self.results.test_count);
             try stdout.print("\n", .{});
         }
     }
@@ -123,24 +135,28 @@ pub const RepetitionTester = struct {
 
                 if (self.mode == Mode.Testing) {
                     const elapsed_time = self.time_accumulated_on_this_test;
+                    const new_page_faults = self.page_faults_accumulated_on_this_test;
 
-                    //std.debug.print("elapsed was {d}\n", .{elapsed_time});
+                    //std.debug.print("new_page_faults was {d}\n", .{new_page_faults});
 
                     self.results.test_count += 1;
                     self.results.total_time += elapsed_time;
+                    self.results.total_page_faults += new_page_faults;
 
                     if (self.results.max_time < elapsed_time) {
                         self.results.max_time = elapsed_time;
+                        self.results.max_time_page_faults = new_page_faults;
                     }
 
                     if (elapsed_time < self.results.min_time) {
                         //std.debug.print("new min {d}, old_min {d}\n", .{ elapsed_time, self.results.min_time });
                         self.results.min_time = elapsed_time;
+                        self.results.min_time_page_faults = new_page_faults;
 
                         self.tests_started_at = current_time;
 
                         if (self.print_new_minimums) {
-                            try self.print_time(stdout, "Min", self.results.min_time, self.cpu_freq, self.bytes_accumulated_on_this_test);
+                            try self.print_time(stdout, "Min", self.results.min_time, self.cpu_freq, self.bytes_accumulated_on_this_test, null);
                         }
                     }
 

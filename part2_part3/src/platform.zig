@@ -5,7 +5,46 @@ const time = @cImport({
     @cInclude("sys/time.h");
 });
 
+const resource = @cImport({
+    @cInclude("sys/resource.h");
+});
+
 pub const OsTimerFreq = 1_000_000;
+
+// man 2 getrusage
+pub fn pageFaults() u64 {
+    const default_timeval = resource.timeval{
+        .tv_sec = 0, // Seconds
+        .tv_usec = 0, // Microseconds
+    };
+
+    var r_usage = resource.rusage{
+        // user time used
+        .ru_utime = default_timeval,
+        // system time used
+        .ru_stime = default_timeval,
+        .ru_maxrss = 0, // max resident set size
+        .ru_ixrss = 0, // integral shared text memory size
+        .ru_idrss = 0, // integral unshared data size
+        .ru_isrss = 0, // integral unshared stack size
+        .ru_minflt = 0, // page reclaims
+        .ru_majflt = 0, // page faults
+        .ru_nswap = 0, // swaps
+        .ru_inblock = 0, // block input operations
+        .ru_oublock = 0, // block output operations
+        .ru_msgsnd = 0, // messages sent
+        .ru_msgrcv = 0, // messages received
+        .ru_nsignals = 0, // signals received
+        .ru_nvcsw = 0, // voluntary context switches
+        .ru_nivcsw = 0, // involuntary context switches
+    };
+
+    // First param is either RUSAGE_SELF or RUSAGE_CHILDREN.
+    _ = resource.getrusage(resource.RUSAGE_SELF, &r_usage);
+
+    const x = @as(u64, @bitCast(r_usage.ru_minflt));
+    return x;
+}
 
 pub fn readOsTimer() u64 {
     var value = time.timeval{

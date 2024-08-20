@@ -411,7 +411,7 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
 
     const stdout = std.io.getStdOut().writer();
     const cpu_freq = platform.estimateCpuFreq(1000);
-    const seconds_to_wait = 5;
+    const seconds_to_wait = 2;
 
     var tester: RepetitionTester = undefined;
 
