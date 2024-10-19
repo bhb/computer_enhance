@@ -11,6 +11,11 @@ const resource = @cImport({
 
 pub const OsTimerFreq = 1_000_000;
 
+// sysctl -a hw machdep.cpu | grep page
+// hw.pagesize: 16384
+// hw.pagesize32: 16384
+// so page size is about 16K
+
 // man 2 getrusage
 pub fn pageFaults() u64 {
     const default_timeval = resource.timeval{

@@ -15,6 +15,20 @@ fn square(x: f64) f64 {
     return x * x;
 }
 
+// Just for bemchmarking
+pub const Buffer = struct {
+    count: u64,
+    data: []u8,
+
+    pub fn init(self: *Buffer, alloc: Allocator) !void {
+        self.data = try alloc.alloc(u8, self.count);
+    }
+
+    pub fn deinit(self: *Buffer, alloc: Allocator) void {
+        alloc.free(self.data);
+    }
+};
+
 const earth_radius = 6371;
 
 const profiler_enabled = true;
@@ -390,6 +404,17 @@ fn print_json(pairs: []PointPair, json_file_name: []const u8) !void {
 
 const ParsedData = std.json.Parsed(Data);
 
+var bufferToAvoidOptimization: Buffer = undefined; // just here so optimization doesn't get rid of the loop
+
+fn writeAllBytes(dest_buffer: Buffer) void {
+    // HERE - need to run this
+    var idx: u64 = 0;
+    while (idx < dest_buffer.count) : (idx += 1) {
+        dest_buffer.data[idx] = @as(u8, @intCast(idx & 0xFF));
+    }
+    bufferToAvoidOptimization = dest_buffer;
+}
+
 // caller must clean up data
 fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
     const pr_id1 = prof.time_block("Read file size");
@@ -415,6 +440,26 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
 
     var tester: RepetitionTester = undefined;
 
+    try stdout.print("---- write all bytes (temporary, just for testing, we can remove!)", .{});
+    tester = RepetitionTester.init();
+    try tester.new_test_wave(info.size, cpu_freq, seconds_to_wait, stdout);
+
+    while (try tester.is_testing(stdout)) {
+        // ################################
+        var dest_buffer: Buffer = Buffer{ .count = 100_00, .data = undefined };
+
+        try dest_buffer.init(alloc);
+
+        tester.start();
+
+        writeAllBytes(dest_buffer);
+
+        tester.stop();
+        tester.count_bytes(dest_buffer.count);
+
+        dest_buffer.deinit(alloc);
+    }
+
     try stdout.print("-----------readAllAlloc\n", .{});
     tester = RepetitionTester.init();
     try tester.new_test_wave(info.size, cpu_freq, seconds_to_wait, stdout);
@@ -427,7 +472,7 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
         defer file2.close();
         const string = try file2.reader().readAllAlloc(alloc, max_bytes);
 
-        // ################################
+        // ######################d##########
 
         tester.stop();
         tester.count_bytes(string.len);
