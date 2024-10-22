@@ -108,8 +108,8 @@ pub const RepetitionTester = struct {
     }
 
     pub fn print_results(self: *RepetitionTester, stdout: anytype) !void {
-        try stdout.print("\n", .{});
         try self.print_time(stdout, "Min", self.results.min_time, self.cpu_freq, self.target_processed_byte_count, self.results.min_time_page_faults);
+        try stdout.print("\n", .{});
         try self.print_time(stdout, "Max", self.results.max_time, self.cpu_freq, self.target_processed_byte_count, self.results.max_time_page_faults);
         try stdout.print("\n", .{});
         if (self.results.test_count > 0) {

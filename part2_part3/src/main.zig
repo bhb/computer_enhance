@@ -440,13 +440,15 @@ fn readJson(json_file_name: []const u8, alloc: Allocator) !ParsedData {
 
     var tester: RepetitionTester = undefined;
 
-    try stdout.print("---- write all bytes (temporary, just for testing, we can remove!)", .{});
+    try stdout.print("--- cpu freq is {d}\n\n", .{cpu_freq});
+    try stdout.print("---- writeAllBytes (temporary, just for testing, we can remove!)\n\n", .{});
     tester = RepetitionTester.init();
-    try tester.new_test_wave(info.size, cpu_freq, seconds_to_wait, stdout);
+    const buf_size = 100_000;
+    try tester.new_test_wave(buf_size, cpu_freq, seconds_to_wait, stdout);
 
     while (try tester.is_testing(stdout)) {
         // ################################
-        var dest_buffer: Buffer = Buffer{ .count = 100_00, .data = undefined };
+        var dest_buffer: Buffer = Buffer{ .count = buf_size, .data = undefined };
 
         try dest_buffer.init(alloc);
 
