@@ -4,4 +4,4 @@ This is my collection of solutions to the [Computer, Enhance!](https://www.compu
 
 All of the solutions are in [Zig](https://ziglang.org) 0.12.0 and may not work in recent releases (Zig is pre-1.0 and is expected to have breaking changes).
 
-Everything here worked for me at some point and was useful for learning the course material.
+Everything here worked for me at some point and was useful for learning the course material. The documentation will likely only make sense to me, but if you have questions, feel free to reach out via Issues to ask questions and I'll try to clarify.
